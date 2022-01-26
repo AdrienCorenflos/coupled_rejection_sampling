@@ -17,3 +17,6 @@ Otherwise, simply download the repository and run `pip .`.
 See the `examples` and `tests` folders. 
 
 
+### References
+
+.. [1]: Corenflos, A. and Särkkä, S., “The Coupled Rejection Sampler”, <i>arXiv e-prints</i>, 2022.
