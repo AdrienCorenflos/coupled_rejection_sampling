@@ -1,0 +1,12 @@
+cvxpy
+jax[cpu]
+jupyter
+matplotlib
+Mosek
+numpy
+pytest
+pytest-mock
+scipy
+seaborn
+tikzplotlib
+tqdm
