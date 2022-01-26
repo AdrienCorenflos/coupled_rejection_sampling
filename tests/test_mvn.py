@@ -33,35 +33,13 @@ def test_ordering():
     a = np.array([0., 1., -1.])
     b = np.array([1., -1., 0.])
 
-    chol_Q_00 = get_optimal_covariance(a, chol_P, b, chol_Sig, 0.0, verbose=True)
-    chol_Q_05 = get_optimal_covariance(a, chol_P, b, chol_Sig, 0.5, verbose=True)
-    chol_Q_10 = get_optimal_covariance(a, chol_P, b, chol_Sig, 1.0, verbose=True)
-    chol_Q_15 = get_optimal_covariance(a, chol_P, b, chol_Sig, 1.5, verbose=True)
+    chol_Q = get_optimal_covariance(a, chol_P, b, chol_Sig, verbose=True)
 
-    is_inverse_less(chol_P, chol_Q_00)
-    is_inverse_less(chol_Sig, chol_Q_00)
-    is_inverse_less(chol_P, chol_Q_05)
-    is_inverse_less(chol_Sig, chol_Q_05)
-    is_inverse_less(chol_P, chol_Q_10)
-    is_inverse_less(chol_Sig, chol_Q_10)
-    is_inverse_less(chol_P, chol_Q_15)
-    is_inverse_less(chol_Sig, chol_Q_15)
+    is_inverse_less(chol_P, chol_Q)
+    is_inverse_less(chol_Sig, chol_Q)
 
-    assert np.linalg.slogdet(chol_P)[1] < np.linalg.slogdet(chol_Q_00)[1]
-    assert np.linalg.slogdet(chol_Sig)[1] < np.linalg.slogdet(chol_Q_00)[1]
-    assert np.linalg.slogdet(chol_Q_00)[1] < np.linalg.slogdet(chol_Q_05)[1]
-    assert np.linalg.slogdet(chol_Q_05)[1] < np.linalg.slogdet(chol_Q_10)[1]
-    assert np.linalg.slogdet(chol_Q_10)[1] < np.linalg.slogdet(chol_Q_15)[1]
-
-    z = a - b
-    z_00 = linalg.solve_triangular(chol_Q_00, z, lower=True)
-    z_05 = linalg.solve_triangular(chol_Q_05, z, lower=True)
-    z_10 = linalg.solve_triangular(chol_Q_10, z, lower=True)
-    z_15 = linalg.solve_triangular(chol_Q_15, z, lower=True)
-
-    assert np.dot(z_00, z_00) > np.dot(z_05, z_05)
-    assert np.dot(z_05, z_05) > np.dot(z_10, z_10)
-    assert np.dot(z_10, z_10) > np.dot(z_15, z_15)
+    assert np.linalg.slogdet(chol_P)[1] < np.linalg.slogdet(chol_Q)[1]
+    assert np.linalg.slogdet(chol_Sig)[1] < np.linalg.slogdet(chol_Q)[1]
 
 
 @pytest.mark.parametrize("d", [1, 2, 3])
