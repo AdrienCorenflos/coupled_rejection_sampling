@@ -2,8 +2,8 @@ cvxpy
 jax[cpu]
 jupyter
 matplotlib
-Mosek
 numpy
+pandas
 pytest
 pytest-mock
 scipy
