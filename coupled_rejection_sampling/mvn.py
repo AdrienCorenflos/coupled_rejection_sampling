@@ -1,78 +1,47 @@
 import math
-from functools import partial, lru_cache
+from functools import partial
 
-import cvxpy as cp
-import jax.experimental.host_callback as hcb
 import jax.numpy as jnp
 import jax.random
 import jax.scipy.linalg as jlinalg
 import jax.scipy.stats as jstats
 import numpy as np
-import scipy.linalg as linalg
 from jax import numpy as jnp
-from jax._src.scipy.linalg import cho_solve
+from jax.scipy.linalg import cho_solve
 
 from coupled_rejection_sampling.coupled_rejection_sampler import coupled_sampler
 
 _LOG_2PI = math.log(2 * math.pi)
 
 
-@lru_cache
-def _get_cvxpy_pb(d):
-    P_inv_param = cp.Parameter((d, d), PSD=True)
-    Sig_inv_param = cp.Parameter((d, d), PSD=True)
-    z_param = cp.Parameter((d,))
-
-    X = cp.Variable((d, d), PSD=True)
-
-    constraints = [X << P_inv_param, X << Sig_inv_param]
-    objective = cp.log_det(X)
-    problem = cp.Problem(cp.Maximize(objective), constraints)
-
-    return problem, X, P_inv_param, Sig_inv_param, z_param
-
-
-def get_optimal_covariance(m, chol_P, mu, chol_Sig, verbose=False):
+def get_optimal_covariance(chol_P, chol_Sig):
     """
     Get the optimal covariance according to the objective defined in Section 3 of [1].
 
+    The notations roughly follow the ones in the article.
+
     Parameters
     ----------
-    m: jnp.ndarray
-        Mean of X
     chol_P: jnp.ndarray
         Square root of the covariance of X. Lower triangular.
-    mu: jnp.ndarray
-        Mean of Y
     chol_Sig: jnp.ndarray
         Square root of the covariance of Y. Lower triangular.
-    verbose: bool, optional
-        Is the solver verbose. Default is False.
     Returns
     -------
     chol_Q: jnp.ndarray
         Cholesky of the resulting dominating matrix.
     """
-    d = m.shape[0]
+    d = chol_P.shape[0]
     if d == 1:
         return np.maximum(chol_P, chol_Sig)
-    problem, X, P_inv_param, Sig_inv_param, z_param = _get_cvxpy_pb(d)
 
-    eye = np.eye(d)
-    P_inv = linalg.cho_solve((chol_P, True), eye)
-    Sig_inv = linalg.cho_solve((chol_Sig, True), eye)
+    right_Y = jlinalg.solve_triangular(chol_P, chol_Sig, lower=True)  # Y = RY.T RY
+    w_Y, v_Y = jlinalg.eigh(right_Y.T @ right_Y)
+    w_Y = jnp.minimum(w_Y, 1)
+    i_w_Y = 1. / jnp.sqrt(w_Y)
 
-    z_param.value = m - mu
-    P_inv_param.value = P_inv
-    Sig_inv_param.value = Sig_inv
-
-    problem.solve(warm_start=True, verbose=verbose, qcp=True, solver=cp.MOSEK)
-
-    Q_inv = X.value
-    chol_Q_inv = linalg.cholesky(Q_inv, lower=True)
-    Q = linalg.cho_solve((chol_Q_inv, True), eye)
-    chol_Q = np.linalg.cholesky(Q)
-    return chol_Q
+    left_Q = chol_Sig @ (v_Y * i_w_Y[None, :])
+    return jlinalg.cholesky(left_Q @ left_Q.T, lower=True)
 
 
 def coupled_mvns(key, m, chol_P, mu, chol_Sig, N=1, chol_Q=None):
@@ -109,9 +78,7 @@ def coupled_mvns(key, m, chol_P, mu, chol_Sig, N=1, chol_Q=None):
     """
 
     if chol_Q is None:
-        # This is gonna be slow, but there is no real JAX version...
-        chol_Q = hcb.call(lambda args: get_optimal_covariance(*args), (m, chol_P, mu, chol_Sig), result_shape=chol_P)
-
+        chol_Q = get_optimal_covariance(chol_P, chol_Sig)
     log_det_chol_P = tril_log_det(chol_P)
     log_det_chol_Sig = tril_log_det(chol_Sig)
     log_det_chol_Q = tril_log_det(chol_Q)

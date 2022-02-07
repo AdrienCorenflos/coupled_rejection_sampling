@@ -1,3 +1,4 @@
+import cvxpy as cp
 import jax.random
 import numpy as np
 import numpy.testing as np_test
@@ -17,6 +18,25 @@ def is_inverse_less(chol_A, chol_B):
     assert np.max(np.real(linalg.eigvals(A_inv - B_inv))) > -1e-7
 
 
+def cvxpy_get_optimal_cov(chol_P, chol_Sig):
+    d = chol_P.shape[0]
+    eye = np.eye(d)
+    P_inv = linalg.cho_solve((chol_P, True), eye)
+    Sig_inv = linalg.cho_solve((chol_Sig, True), eye)
+
+    X = cp.Variable((d, d), PSD=True)
+
+    constraints = [X << P_inv, X << Sig_inv]
+    objective = cp.log_det(X)
+    problem = cp.Problem(cp.Maximize(objective), constraints)
+    problem.solve(warm_start=True, qcp=True, solver=cp.SCS)
+    Q_inv = X.value
+    chol_Q_inv = linalg.cholesky(Q_inv, lower=True)
+    Q = linalg.cho_solve((chol_Q_inv, True), eye)
+    chol_Q = np.linalg.cholesky(Q)
+    return chol_Q
+
+
 def test_ordering():
     chol_P = np.array([
         [1.0, 0.0, 0.0],
@@ -25,15 +45,14 @@ def test_ordering():
     ])
 
     chol_Sig = np.array([
-        [1.3, 0.0, 0.0],
+        [0.2, 0.0, 0.0],
         [0.5, 0.9, 0.0],
-        [0.1, 1.7, 0.2]
+        [0.1, 1.7, 1.5]
     ])
 
-    a = np.array([0., 1., -1.])
-    b = np.array([1., -1., 0.])
-
-    chol_Q = get_optimal_covariance(a, chol_P, b, chol_Sig, verbose=True)
+    chol_Q = get_optimal_covariance(chol_P, chol_Sig)
+    cvxpy_chol_Q = cvxpy_get_optimal_cov(chol_P, chol_Sig)
+    np.testing.assert_allclose(chol_Q, cvxpy_chol_Q, rtol=1e-4, atol=1e-5)
 
     is_inverse_less(chol_P, chol_Q)
     is_inverse_less(chol_Sig, chol_Q)
@@ -108,22 +127,7 @@ def test_mvns_different_cov(d, M, mocker: MockerFixture):
     np_test.assert_allclose(np.cov(ys, rowvar=False), chol_Sigma @ chol_Sigma.T, atol=1e-2, rtol=1e-2)
 
 
-
 def test_lower_bound():
-    # A trivial test
-    m = np.array([1.])
-    mu = np.array([1.])
-    Sig = np.array([[1.]])
-    P = np.array([[1.]])
-    Q = np.array([[1.]])
-
-    chol_P = linalg.cholesky(P, lower=True)
-    chol_Sig = linalg.cholesky(Sig, lower=True)
-    chol_Q = linalg.cholesky(Q, lower=True)
-    K = coupled_mvns.lower_bound(m, chol_P, mu, chol_Sig, chol_Q)
-
-    assert K == pytest.approx(1., rel=1e-5, abs=1e-5)
-
     # Test against reflection coupling
     m = np.array([1., 2.])
     mu = np.array([1.5, 1.1])

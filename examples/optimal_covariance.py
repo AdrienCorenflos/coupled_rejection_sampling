@@ -1,14 +1,13 @@
 """
 This corresponds to the Application 1 of [1]. 
 """
+import time
 from functools import partial
 
-import jax.experimental.host_callback as hcb
 import jax.numpy as jnp
 import jax.random
 import matplotlib.pyplot as plt
 import numpy as np
-import tikzplotlib
 import tqdm.auto as tqdm
 from jax.scipy import linalg
 
@@ -19,7 +18,7 @@ PLOT = True
 save_path = "out/optimal.npz"
 
 jax_key = jax.random.PRNGKey(42)
-D = 10
+D = 15
 P = jnp.diag(jnp.arange(1, D + 1))
 
 chol_P = jnp.linalg.cholesky(P)
@@ -27,7 +26,7 @@ m = mu = jnp.zeros((D,))
 
 B = 200  # number of covariances
 M = 500  # number of RS experiments
-NS = [1, 8, 64, 512]
+NS = [4 ** k for k in range(6)]
 
 
 def rejection_experiment():
@@ -39,8 +38,7 @@ def rejection_experiment():
         orth, _ = linalg.qr(gauss)
         Sigma = orth @ P @ orth.T
         chol_Sigma = jnp.linalg.cholesky(Sigma)
-        chol_Q = hcb.call(lambda args: get_optimal_covariance(*args), (m, chol_P, mu, chol_Sigma),
-                          result_shape=chol_P)
+        chol_Q = get_optimal_covariance(chol_P, chol_Sigma)
         return chol_Sigma, chol_Q
 
     res_shape = B, len(NS), 2
@@ -48,6 +46,7 @@ def rejection_experiment():
     res_var_coupled = np.zeros(res_shape)
     res_mean_trials = np.zeros(res_shape)
     res_var_trials = np.zeros(res_shape)
+    res_runtime = np.zeros(res_shape)
 
     res_coupling_bounds = np.zeros((B, 2))
     res_trials_bounds = np.zeros(res_shape)
@@ -79,24 +78,31 @@ def rejection_experiment():
             res_trials_bounds[b, i, 0] = (1 + (n - 1) / trials_opt) / (n / trials_opt)
             res_trials_bounds[b, i, 1] = (1 + (n - 1) / trials_max) / (n / trials_max)
 
+            tic = time.time()
             (res_mean_coupled[b, i, 0], res_var_coupled[b, i, 0], res_mean_trials[b, i, 0],
              res_var_trials[b, i, 0]) = test_fun(rs_key, chol_Sigma, chol_Q, n)
+            res_runtime[b, i, 0] = time.time() - tic
 
+            tic = time.time()
             (res_mean_coupled[b, i, 1], res_var_coupled[b, i, 1], res_mean_trials[b, i, 1],
              res_var_trials[b, i, 1]) = test_fun(rs_key, chol_Sigma, chol_Q_max, n)
-
-    return res_mean_coupled, res_var_coupled, res_mean_trials, res_var_trials, res_coupling_bounds, res_trials_bounds
+            res_runtime[b, i, 1] = time.time() - tic
+    return res_mean_coupled, res_var_coupled, res_mean_trials, res_var_trials, res_coupling_bounds, res_trials_bounds, res_runtime
 
 
 if RUN:
-    (coupled_mean, coupled_var, n_trials_mean, n_trials_var, coupling_bounds, n_trials_bounds) = rejection_experiment()
+    (coupled_mean, coupled_var, n_trials_mean, n_trials_var, coupling_bounds, n_trials_bounds,
+     runtime) = rejection_experiment()
     np.savez(save_path, coupled_mean=coupled_mean, coupled_var=coupled_var,
              n_trials_mean=n_trials_mean, n_trials_var=n_trials_var, coupling_bounds=coupling_bounds,
-             n_trials_bounds=n_trials_bounds)
+             n_trials_bounds=n_trials_bounds, runtime=runtime)
 
 if PLOT:
     data = np.load(save_path)
-    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(12, 6), sharex=True, sharey=True)
+    fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(15, 7), sharex=True, sharey=True)
+
+    print(np.mean(data["runtime"][1:], 0))
+    print(np.std(data["runtime"][1:], 0))
 
     for i, n in enumerate(NS):
         ax = axes.flatten()[i]
@@ -108,16 +114,16 @@ if PLOT:
         ax.scatter(range(B), data["coupled_mean"][arg_sort, i, 1], label=f"Empirical MAX",
                    color="tab:orange",
                    alpha=0.75)
-
-        ax.plot(range(B), data["coupling_bounds"][arg_sort, 0], label="Optimised bound",
-                color="tab:blue")
-        ax.plot(range(B), data["coupling_bounds"][arg_sort, 1], label="MAX bound",
-                color="tab:orange")
+        twinx = ax.twinx()
+        twinx.semilogy(range(B), data["coupling_bounds"][arg_sort, 0], label="Optimised bound",
+                   color="tab:blue")
+        twinx.semilogy(range(B), data["coupling_bounds"][arg_sort, 1], label="MAX bound",
+                   color="tab:orange")
     axes[0, 0].legend(loc="upper left")
-    # plt.show()
-    tikzplotlib.save("out/gaussian_opt_coupling.tikz")
+    plt.show()
+    # tikzplotlib.save("out/gaussian_opt_coupling.tikz")
 
-    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(12, 6), sharex=True, sharey=True)
+    fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(15, 7), sharex=True, sharey=True)
     for i, n in enumerate(NS):
         ax = axes.flatten()[i]
         ax.set_title(f"$N={n}$")
@@ -131,6 +137,6 @@ if PLOT:
                    alpha=0.75)
         ax.plot(range(B), 1 / data["n_trials_bounds"][arg_sort, i, 1], label="MAX bound", color="tab:orange")
     axes[0, 0].legend(loc="upper left")
-    # plt.show()
+    plt.show()
 
-    tikzplotlib.save("out/gaussian_opt_acceptance.tikz")
+    # tikzplotlib.save("out/gaussian_opt_acceptance.tikz")
