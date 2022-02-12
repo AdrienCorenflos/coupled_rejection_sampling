@@ -52,3 +52,24 @@ def test_c_sample():
 
     np_test.assert_allclose(sinint1, sinint2, atol=1e-2, rtol=1e-2)
     np_test.assert_allclose(cosint1, cosint2, atol=1e-2, rtol=1e-2)
+
+def test_exp_exp():
+    mu = 1
+    eta = 1.2
+
+    gt = gauss_tails.GaussTails(mu, eta)
+    tZ = gt.e_alpha_gamma_mu - gt.e_beta_gamma_eta
+
+    u = 0.5
+    x, _, _ = gt.exp_exp_solve_right(tZ * u)
+    err = (jnp.exp(-gt.alpha * (x - gt.mu)) - jnp.exp(-gt.beta * (x - gt.eta))) / tZ - u
+
+    np_test.assert_allclose(err, 0.0, atol=1e-2, rtol=1e-2)
+    assert x > gt.gamma
+
+    u = -1
+    x, _, _ = gt.exp_exp_solve_left(tZ * u)
+    err = (jnp.exp(-gt.alpha * (x - gt.mu)) - jnp.exp(-gt.beta * (x - gt.eta))) / tZ - u
+
+    np_test.assert_allclose(err, 0.0, atol=1e-2, rtol=1e-2)
+    assert x < gt.gamma

@@ -91,7 +91,7 @@ class GaussTails:
         xp2 = -(1.0 / self.alpha) * jnp.log(u / d)       # Using lower bounding exponential for x >= gamma
         xp = jnp.max(jnp.stack([xp1, xp2]), axis=0)
 
-        print(f"xp1 = {xp1}, xp12 = {xp2}, xp = {xp}")
+#        print(f"xp1 = {xp1}, xp12 = {xp2}, xp = {xp}")
 
         def log_f(x):
             return jnp.log((jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta))) / tZ) - jnp.log(u)
@@ -110,13 +110,40 @@ class GaussTails:
             err = jnp.exp(lf + jnp.log(u)) - u  # Actual error
             iter += 1
 
-            print(f"xp = {xp}, err = {err}")
+#            print(f"xp = {xp}, err = {err}")
 
         return xp, iter, err
 
-    def exp_exp_solve_left(self, y, num_iter=20):
+    def exp_exp_solve_left(self, y, max_iter=50, err_thr=1e-6):
         """ Solve the equation exp(-alpha (x - mu)) - exp(-beta (x - eta)) = y for eta <= x <= gamma
             If y has multiple elements, then the equation is solved for each of them """
-        pass
 
+        tZ = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
+        u = y / tZ
 
+        # Sanity check
+        if jnp.any(u > 1):
+            raise ValueError("Need to have y / tZ <= 1")
+
+        # Initial guess
+        xp = 0.5 * (self.eta + self.gamma)
+
+        def f(x):
+            return (jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta))) / tZ - u
+
+        def df(x):
+            return (-self.alpha * jnp.exp(-self.alpha * (x - self.mu)) + self.beta * jnp.exp(-self.beta * (x - self.eta))) / tZ
+
+        # Newton's iteration
+        iter = 0
+        err = 100.0 * jnp.ones_like(xp)
+        while iter < max_iter and jnp.abs(err).max() > err_thr:
+            f_val = f(xp)
+            df_val = df(xp)
+            xp = xp - f_val / df_val
+            err = f_val  # Actual error
+            iter += 1
+
+#            print(f"xp = {xp}, err = {err}")
+
+        return xp, iter, err
