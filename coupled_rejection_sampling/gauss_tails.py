@@ -71,18 +71,17 @@ class GaussTails:
 
         return jnp.where(u1 < p, C1_inv(u2), C2_inv(u2))
 
-    def exp_exp_solve_right(self, y, max_iter=10, err_thr=1e-6):
-        """ Solve the equation exp(-alpha (x - mu)) - exp(-beta (x - eta)) = y for x >= gamma
-            If y has multiple elements, then the equation is solved for each of them """
+    def TP1_inv(self, u, max_iter=20, err_thr=1e-10):
+        """ Solve the equation (exp(-alpha (x - mu)) - exp(-beta (x - eta))) / tZ = u for x >= gamma
+            If u has multiple elements, then the equation is solved for each of them """
 
         tZ = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
-        u = y / tZ
 
         # Sanity checks
-        if jnp.any(u > 1):
-            raise ValueError("Need to have y / tZ <= 1")
+        if jnp.any(u >= 1):
+            raise ValueError("Need to have u < 1")
         if jnp.any(u <= 0):
-            raise ValueError("Need to have y / tZ > 0")
+            raise ValueError("Need to have u > 0")
 
         # Initial guess
         q = (self.alpha**2 * self.e_alpha_gamma_mu - self.beta**2 * self.e_beta_gamma_eta) / tZ
@@ -91,20 +90,20 @@ class GaussTails:
         xp2 = -(1.0 / self.alpha) * jnp.log(u / d)       # Using lower bounding exponential for x >= gamma
         xp = jnp.max(jnp.stack([xp1, xp2]), axis=0)
 
-#        print(f"xp1 = {xp1}, xp12 = {xp2}, xp = {xp}")
+#        print(f"xp1 = {xp1}, xp2 = {xp2}, xp = {xp}")
 
         def log_f(x):
             return jnp.log((jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta))) / tZ) - jnp.log(u)
 
         def log_df(x):
-            return (-self.alpha * jnp.exp(-self.alpha * (x - self.mu)) + self.beta * jnp.exp(-self.beta * (x - self.eta)))\
+            return (-self.alpha * jnp.exp(-self.alpha * (x - self.mu)) + self.beta * jnp.exp(-self.beta * (x - self.eta))) \
                    / (jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta)))
 
         # Newton's iteration
         iter = 0
         err = 100.0 * jnp.ones_like(xp)
         while iter < max_iter and jnp.abs(err).max() > err_thr:
-            lf  = log_f(xp)
+            lf = log_f(xp)
             ldf = log_df(xp)
             xp = xp - lf / ldf
             err = jnp.exp(lf + jnp.log(u)) - u  # Actual error
@@ -114,36 +113,112 @@ class GaussTails:
 
         return xp, iter, err
 
-    def exp_exp_solve_left(self, y, max_iter=50, err_thr=1e-6):
-        """ Solve the equation exp(-alpha (x - mu)) - exp(-beta (x - eta)) = y for eta <= x <= gamma
-            If y has multiple elements, then the equation is solved for each of them """
+    def TQ_inv(self, u, max_iter=20, err_thr=1e-10):
+        """ Solve the equation (exp(-beta (x - eta) + exp(-alpha (eta - mu)) - exp(-alpha (x - mu))) / Zq = 1/Zq - u
+            for eta <= x <= gamma. If y has multiple elements, then the equation is solved for each of them """
 
-        tZ = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
-        u = y / tZ
+        Zq = 1 - self.e_alpha_eta_mu + self.e_alpha_gamma_mu - self.e_beta_gamma_eta
 
-        # Sanity check
-        if jnp.any(u > 1):
-            raise ValueError("Need to have y / tZ <= 1")
+        # Sanity checks
+        if jnp.any(u >= 1):
+            raise ValueError("Need to have u < 1")
+        if jnp.any(u <= 0):
+            raise ValueError("Need to have u > 0")
 
         # Initial guess
-        xp = 0.5 * (self.eta + self.gamma)
+        xp = self.eta
 
-        def f(x):
-            return (jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta))) / tZ - u
+        def log_f(x):
+            return jnp.log((self.e_alpha_eta_mu - jnp.exp(-self.alpha*(x - self.mu))
+                            + jnp.exp(-self.beta * (x - self.eta))) / Zq) - jnp.log(1.0/Zq-u)
 
-        def df(x):
-            return (-self.alpha * jnp.exp(-self.alpha * (x - self.mu)) + self.beta * jnp.exp(-self.beta * (x - self.eta))) / tZ
+        def log_df(x):
+            return (self.alpha * jnp.exp(-self.alpha*(x - self.mu)) - self.beta * jnp.exp(-self.beta * (x - self.eta))) \
+                   / (self.e_alpha_eta_mu - jnp.exp(-self.alpha * (x-self.mu)) + jnp.exp(-self.beta * (x - self.eta)))
 
         # Newton's iteration
         iter = 0
         err = 100.0 * jnp.ones_like(xp)
         while iter < max_iter and jnp.abs(err).max() > err_thr:
-            f_val = f(xp)
-            df_val = df(xp)
-            xp = xp - f_val / df_val
-            err = f_val  # Actual error
+            lf = log_f(xp)
+            ldf = log_df(xp)
+            xp = xp - lf / ldf
+            err = jnp.exp(lf + jnp.log(1.0/Zq-u)) - 1.0/Zq + u  # Actual error
             iter += 1
 
 #            print(f"xp = {xp}, err = {err}")
 
         return xp, iter, err
+
+    def tp_logpdf(self, x):
+        """ Evaluate tildep(x) \propto p(x) - min(p(x),q(x)) """
+        # TODO: to be tested
+        Zp = 1 - self.e_alpha_eta_mu + self.e_alpha_gamma_mu - self.e_beta_gamma_eta
+        return jnp.where((x >= self.mu) & (x <= self.eta), texp_logpdf(x, self.mu, self.alpha) - jnp.log(Zp),
+                         jnp.where((x >= self.eta) & (x <= gamma),
+                                   jnp.log(jnp.exp(texp_logpdf(x, self.mu, self.alpha))
+                                           - jnp.exp(texp_logpdf(x, self.eta, self.beta))) - jnp.log(Zp), 0))
+
+    def tp_sample_icdf(self, key, N=1):
+        """ Sample from tildep(x) \propto p(x) - min(p(x),q(x)) """
+        # TODO: to be tested
+        u12 = jax.random.uniform(key, shape=(N,2))
+        u1 = u12[:,0]
+        u2 = u12[:,1]
+
+        p1 = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
+        p2 = 1 - self.e_alpha_eta_mu
+        p = p1 / (p1 + p2)
+
+        def TP2_inv(u):
+            return self.mu - (1.0/self.alpha) * jnp.log(1.0 - u * (1 - self.e_alpha_eta_mu))
+
+        return jnp.where(u1 < p, self.TP1_inv(u2), TP2_inv(u2))
+
+
+    def tq_logpdf(self, x):
+        """ Evaluate tildeq(x) \propto q(x) - min(p(x),q(x)) """
+        # TODO: to be tested
+        Zq = 1 - self.e_alpha_eta_mu + self.e_alpha_gamma_mu - self.e_beta_gamma_eta
+        return jnp.where((x >= self.eta) & (x <= self.gamma),
+                         jnp.log(jnp.exp(texp_logpdf(x, self.eta, self.beta))
+                                 - jnp.exp(texp_logpdf(x, self.mu, self.alpha))) - jnp.log(Zq), 0)
+
+    def tq_sample_icdf(self, key, N=1):
+        """ Sample from tildeq(x) \propto q(x) - min(p(x),q(x)) """
+        # TODO: to be tested
+        u = jax.random.uniform(key, shape=(N,))
+        return self.TQ_inv(u)
+
+
+    def Gamma_hat(self, key, N=1):
+        """ Sample from coupling of translated exponentials """
+        # TODO: to be tested
+        pxy = self.pxy()
+        are_coupled = (u <= pxy)
+        tp_samples = [] # TODO
+        tq_samples = [] # TODO
+        c_samples = []  # TODO
+        xs = jnp.where(are_coupled, c_samples, tp_samples)
+        ys = jnp.where(are_coupled, c_samples, tq_samples)
+        return xs, ys, are_coupled
+
+    def log_p(self, x):
+        return -0.5 * (x - self.alpha) ** 2
+
+    def log_q(self, x):
+        return -0.5 * (x - self.beta) ** 2
+
+    def log_p_hat(self, x):
+        return jnp.ones_like(x)
+
+    def log_q_hat(self, x):
+        return jnp.ones_like(x)
+
+    def M_p(self):
+        # TODO
+        pass
+
+    def M_q(self):
+        # TODO
+        pass

@@ -6,6 +6,9 @@ import scipy.integrate
 import pytest
 import numpy.testing as np_test
 
+from jax.config import config
+config.update("jax_enable_x64", True)
+
 import coupled_rejection_sampling.gauss_tails as gauss_tails
 
 @pytest.mark.parametrize("mu", [1.0, 2.0, 3.0])
@@ -53,23 +56,24 @@ def test_c_sample():
     np_test.assert_allclose(sinint1, sinint2, atol=1e-2, rtol=1e-2)
     np_test.assert_allclose(cosint1, cosint2, atol=1e-2, rtol=1e-2)
 
-def test_exp_exp():
+@pytest.mark.parametrize("u", [0.00001, 0.1, 0.5, 0.99999])
+def test_tp1_tq_inv(u):
     mu = 1
     eta = 1.2
 
     gt = gauss_tails.GaussTails(mu, eta)
+
     tZ = gt.e_alpha_gamma_mu - gt.e_beta_gamma_eta
 
-    u = 0.5
-    x, _, _ = gt.exp_exp_solve_right(tZ * u)
+    x, _, _ = gt.TP1_inv(u)
     err = (jnp.exp(-gt.alpha * (x - gt.mu)) - jnp.exp(-gt.beta * (x - gt.eta))) / tZ - u
 
     np_test.assert_allclose(err, 0.0, atol=1e-2, rtol=1e-2)
     assert x > gt.gamma
 
-    u = -1
-    x, _, _ = gt.exp_exp_solve_left(tZ * u)
-    err = (jnp.exp(-gt.alpha * (x - gt.mu)) - jnp.exp(-gt.beta * (x - gt.eta))) / tZ - u
+    Zq = 1 - gt.e_alpha_eta_mu + gt.e_alpha_gamma_mu - gt.e_beta_gamma_eta
+    x, _, _ = gt.TQ_inv(u)
+    err = (1 - gt.e_alpha_eta_mu + jnp.exp(-gt.alpha * (x - gt.mu)) - jnp.exp(-gt.beta * (x - gt.eta))) / Zq - u
 
     np_test.assert_allclose(err, 0.0, atol=1e-2, rtol=1e-2)
     assert x < gt.gamma
