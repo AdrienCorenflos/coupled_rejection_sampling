@@ -152,16 +152,15 @@ class GaussTails:
 
     def tp_logpdf(self, x):
         """ Evaluate tildep(x) \propto p(x) - min(p(x),q(x)) """
-        # TODO: to be tested
         Zp = 1 - self.e_alpha_eta_mu + self.e_alpha_gamma_mu - self.e_beta_gamma_eta
+        # XXX: Note that this evaluates some logs of negative values which might cause trouble:
         return jnp.where((x >= self.mu) & (x <= self.eta), texp_logpdf(x, self.mu, self.alpha) - jnp.log(Zp),
-                         jnp.where((x >= self.eta) & (x <= gamma),
+                         jnp.where(x >= self.gamma,
                                    jnp.log(jnp.exp(texp_logpdf(x, self.mu, self.alpha))
-                                           - jnp.exp(texp_logpdf(x, self.eta, self.beta))) - jnp.log(Zp), 0))
+                                           - jnp.exp(texp_logpdf(x, self.eta, self.beta))) - jnp.log(Zp), -jnp.inf))
 
     def tp_sample_icdf(self, key, N=1):
         """ Sample from tildep(x) \propto p(x) - min(p(x),q(x)) """
-        # TODO: to be tested
         u12 = jax.random.uniform(key, shape=(N,2))
         u1 = u12[:,0]
         u2 = u12[:,1]
@@ -173,25 +172,24 @@ class GaussTails:
         def TP2_inv(u):
             return self.mu - (1.0/self.alpha) * jnp.log(1.0 - u * (1 - self.e_alpha_eta_mu))
 
-        return jnp.where(u1 < p, self.TP1_inv(u2), TP2_inv(u2))
+        return jnp.where(u1 < p, self.TP1_inv(u2)[0], TP2_inv(u2))
 
 
     def tq_logpdf(self, x):
         """ Evaluate tildeq(x) \propto q(x) - min(p(x),q(x)) """
-        # TODO: to be tested
         Zq = 1 - self.e_alpha_eta_mu + self.e_alpha_gamma_mu - self.e_beta_gamma_eta
+        # XXX: Note that this evaluates some logs of negative values which might cause trouble:
         return jnp.where((x >= self.eta) & (x <= self.gamma),
                          jnp.log(jnp.exp(texp_logpdf(x, self.eta, self.beta))
-                                 - jnp.exp(texp_logpdf(x, self.mu, self.alpha))) - jnp.log(Zq), 0)
+                                 - jnp.exp(texp_logpdf(x, self.mu, self.alpha))) - jnp.log(Zq), -jnp.inf)
 
     def tq_sample_icdf(self, key, N=1):
         """ Sample from tildeq(x) \propto q(x) - min(p(x),q(x)) """
-        # TODO: to be tested
         u = jax.random.uniform(key, shape=(N,))
-        return self.TQ_inv(u)
+        return self.TQ_inv(u)[0]
 
 
-    def Gamma_hat(self, key, N=1):
+    def Gamma_hat(self, key, N=1, tp_rs=False, tq_rs=False):
         """ Sample from coupling of translated exponentials """
         # TODO: to be tested
         pxy = self.pxy()
