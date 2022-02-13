@@ -191,16 +191,46 @@ class GaussTails:
 
     def Gamma_hat(self, key, N=1, tp_rs=False, tq_rs=False):
         """ Sample from coupling of translated exponentials """
-        # TODO: to be tested
+        # TODO: no unit test for this yet
         pxy = self.pxy()
+        new_keys = jax.random.split(key, 4)
+
+        u = jax.random.uniform(new_keys[0], shape=(N,))
         are_coupled = (u <= pxy)
-        tp_samples = [] # TODO
-        tq_samples = [] # TODO
-        c_samples = []  # TODO
+
+        c_samples = self.c_sample(new_keys[1], N)
+
+        if tp_rs:
+            #tp_samples = self.tp_sample_rs(new_keys[2], N)
+            raise ValueError("Not yet implemented")
+        else:
+            tp_samples = self.tp_sample_icdf(new_keys[2], N)
+
+        if tq_rs:
+            # tq_samples = self.tq_sample_rs(new_keys[3], N)
+            raise ValueError("Not yet implemented")
+        else:
+            tq_samples = self.tq_sample_icdf(new_keys[3], N)
+
         xs = jnp.where(are_coupled, c_samples, tp_samples)
         ys = jnp.where(are_coupled, c_samples, tq_samples)
         return xs, ys, are_coupled
 
+    #
+    # Samplers for marginals by using the method from Robert (2009)
+    #
+    def p(self, key, N=1):
+        # TODO: implement
+        pass
+
+    def q(self, key, N=1):
+        # TODO: implement
+        pass
+
+    #
+    # ATTN: We actually put log_p = log( p / p_hat ), log_p_hat = 0, M_p = 1 and the same for q
+    # to avoid explicit evaluation of p and p_hat and M.
+    #
     def log_p(self, x):
         return -0.5 * (x - self.alpha) ** 2
 
@@ -208,15 +238,15 @@ class GaussTails:
         return -0.5 * (x - self.beta) ** 2
 
     def log_p_hat(self, x):
-        return jnp.ones_like(x)
+        return jnp.zeros_like(x)
 
     def log_q_hat(self, x):
-        return jnp.ones_like(x)
+        return jnp.zeros_like(x)
 
-    def M_p(self):
-        # TODO
-        pass
-
-    def M_q(self):
-        # TODO
-        pass
+    #
+    # The actual sampling routine
+    #
+    def coupled_gauss_tails(self, key, N=1):
+        # TODO: Not tested at all
+        return coupled_sampler(key, self.Gamma_hat, self.p, self.q, self.log_p_hat, self.log_q_hat,
+                               self.log_p, self.log_q, 0.0, 0.0, N)
