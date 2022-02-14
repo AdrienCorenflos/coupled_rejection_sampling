@@ -209,3 +209,12 @@ def test_tq_sample():
     np_test.assert_allclose(sinint1, sinint2, atol=1e-2, rtol=1e-2)
     np_test.assert_allclose(cosint1, cosint2, atol=1e-2, rtol=1e-2)
 
+def test_coupled_sampling():
+    mu = 1
+    eta = 1.2
+
+    key = jax.random.PRNGKey(1)
+    gt = gauss_tails.GaussTails(mu, eta)
+    tmp = gt.coupled_gauss_tails(key, 1)
+    print(tmp)
+

@@ -254,6 +254,7 @@ class GaussTails:
     # Samplers for marginals by using the method from Robert (2009)
     #
     def p(self, key, N=1):
+        # TODO: Get rid of the vmap
         # TODO: No unit test yet
         def p_one(k):
             def body(carry):
@@ -273,6 +274,7 @@ class GaussTails:
         return x_values
 
     def q(self, key, N=1):
+        # TODO: Get rid of the vmap
         # TODO: No unit test yet
         def q_one(k):
             def body(carry):
@@ -312,5 +314,5 @@ class GaussTails:
     #
     def coupled_gauss_tails(self, key, N=1):
         # TODO: Not tested at all
-        return coupled_sampler(key, self.Gamma_hat, self.p, self.q, self.log_p_hat, self.log_q_hat,
+        return coupled_sampler(key, self.Gamma_hat, lambda x: self.p(x)[0], lambda x: self.q(x)[0], self.log_p_hat, self.log_q_hat,
                                self.log_p, self.log_q, 0.0, 0.0, N)
