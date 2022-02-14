@@ -95,22 +95,16 @@ class GaussTails:
         """ Solve the equation (exp(-alpha (x - mu)) - exp(-beta (x - eta))) / tZ = u for x >= gamma
             If u has multiple elements, then the equation is solved for each of them """
 
-        tZ = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
+        # TODO: This could be reimplemented as vectorized map over u
 
-        # Sanity checks -- removed, Jax doesn't like these
-#        if jnp.any(u >= 1):
-#            raise ValueError("Need to have u < 1")
-#        if jnp.any(u <= 0):
-#            raise ValueError("Need to have u > 0")
+        tZ = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
 
         # Initial guess
         q = (self.alpha**2 * self.e_alpha_gamma_mu - self.beta**2 * self.e_beta_gamma_eta) / tZ
         xp1 = self.gamma + jnp.sqrt(2.0 * (u - 1.0) / q)  # Using quadratic fit at x = gamma
         d = (jnp.exp(self.alpha * self.mu) - jnp.exp(self.beta * self.eta) * jnp.exp(-(self.beta - self.alpha) * self.gamma)) / tZ
         xp2 = -(1.0 / self.alpha) * jnp.log(u / d)       # Using lower bounding exponential for x >= gamma
-        xp = jnp.max(jnp.stack([xp1, xp2]), axis=0)
-
-#        print(f"xp1 = {xp1}, xp2 = {xp2}, xp = {xp}")
+        init_xp = jnp.max(jnp.stack([xp1, xp2]), axis=0)
 
         def log_f(x):
             return jnp.log((jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta))) / tZ) - jnp.log(u)
@@ -120,33 +114,41 @@ class GaussTails:
                    / (jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta)))
 
         # Newton's iteration
-        iter = 0
-        err = 100.0 * jnp.ones_like(xp)
-        while iter < max_iter and jnp.abs(err).max() > err_thr:
+#        iter = 0
+#        err = 100.0 * jnp.ones_like(xp)
+#        while iter < max_iter and jnp.abs(err).max() > err_thr:
+#            lf = log_f(xp)
+#            ldf = log_df(xp)
+#            xp = xp - lf / ldf
+#            err = jnp.exp(lf + jnp.log(u)) - u  # Actual error
+#            iter += 1
+#            print(f"xp = {xp}, err = {err}")
+
+        def body(carry):
+            xp, i, err = carry
             lf = log_f(xp)
             ldf = log_df(xp)
             xp = xp - lf / ldf
             err = jnp.exp(lf + jnp.log(u)) - u  # Actual error
-            iter += 1
+            return xp, i+1, err
 
-#            print(f"xp = {xp}, err = {err}")
+        def cond(carry):
+            xp, i, err = carry
+            return jnp.logical_and(i < max_iter, jnp.abs(err).max() > err_thr)
 
-        return xp, iter, err
+        return jax.lax.while_loop(cond, body, (init_xp, 0, 100.0 * jnp.ones_like(init_xp)))
+
 
     def TQ_inv(self, u, max_iter=20, err_thr=1e-10):
         """ Solve the equation (exp(-beta (x - eta) + exp(-alpha (eta - mu)) - exp(-alpha (x - mu))) / Zq = 1/Zq - u
             for eta <= x <= gamma. If y has multiple elements, then the equation is solved for each of them """
 
+        # TODO: This could be reimplemented as vectorized map over u
+
         Zq = 1 - self.e_alpha_eta_mu + self.e_alpha_gamma_mu - self.e_beta_gamma_eta
 
-        # Sanity checks -- removed, Jax doesn't like these
-#        if jnp.any(u >= 1):
-#            raise ValueError("Need to have u < 1")
-#        if jnp.any(u <= 0):
-#            raise ValueError("Need to have u > 0")
-
         # Initial guess
-        xp = self.eta
+        init_xp = self.eta * jnp.ones_like(u)
 
         def log_f(x):
             return jnp.log((self.e_alpha_eta_mu - jnp.exp(-self.alpha*(x - self.mu))
@@ -157,18 +159,30 @@ class GaussTails:
                    / (self.e_alpha_eta_mu - jnp.exp(-self.alpha * (x-self.mu)) + jnp.exp(-self.beta * (x - self.eta)))
 
         # Newton's iteration
-        iter = 0
-        err = 100.0 * jnp.ones_like(xp)
-        while iter < max_iter and jnp.abs(err).max() > err_thr:
+#        iter = 0
+#        err = 100.0 * jnp.ones_like(xp)
+#        while iter < max_iter and jnp.abs(err).max() > err_thr:
+#            lf = log_f(xp)
+#            ldf = log_df(xp)
+#            xp = xp - lf / ldf
+#            err = jnp.exp(lf + jnp.log(1.0/Zq-u)) - 1.0/Zq + u  # Actual error
+#            iter += 1
+#            print(f"xp = {xp}, err = {err}")
+
+        def body(carry):
+            xp, i, err = carry
             lf = log_f(xp)
             ldf = log_df(xp)
             xp = xp - lf / ldf
             err = jnp.exp(lf + jnp.log(1.0/Zq-u)) - 1.0/Zq + u  # Actual error
-            iter += 1
+            return xp, i+1, err
 
-#            print(f"xp = {xp}, err = {err}")
+        def cond(carry):
+            xp, i, err = carry
+            return jnp.logical_and(i < max_iter, jnp.abs(err).max() > err_thr)
 
-        return xp, iter, err
+        return jax.lax.while_loop(cond, body, (init_xp, 0, 100.0 * jnp.ones_like(init_xp)))
+
 
     def tp_logpdf(self, x):
         """ Evaluate tildep(x) \propto p(x) - min(p(x),q(x)) """
@@ -241,36 +255,40 @@ class GaussTails:
     #
     def p(self, key, N=1):
         # TODO: No unit test yet
-        up = UniformProducer(key, 10 * N, None)
-        x_values = jnp.empty((N,))
-        for n in range(N):
-            accepted = False
-            x = 0.0
-            while not accepted:
-                u1 = up.uniform()
-                x = self.mu - (1.0/self.alpha) * jnp.log(1 - u1)
-                u2 = up.uniform()
-                if u2 <= jnp.exp(-0.5 * (x - self.alpha)**2):
-                    accepted = True
-            x_values = x_values.at[n].set(x)
+        def p_one(k):
+            def body(carry):
+                curr_k, *_ = carry
+                curr_k, k2, k3 = jax.random.split(curr_k, 3)
+                u1 = jax.random.uniform(k2)
+                x = self.mu - (1.0 / self.alpha) * jnp.log(1 - u1)
+                u2 = jax.random.uniform(k3)
+                accepted = u2 <= jnp.exp(-0.5 * (x - self.alpha) ** 2)
+                return curr_k, x, accepted
 
+            _, x_out, _ = jax.lax.while_loop(lambda carry: jnp.logical_not(carry[-1]), body, (k, 0.0, False))
+            return x_out
+
+        keys = jax.random.split(key, N)
+        x_values = jax.vmap(p_one)(keys)
         return x_values
 
     def q(self, key, N=1):
         # TODO: No unit test yet
-        up = UniformProducer(key, 10 * N, None)
-        x_values = jnp.empty((N,))
-        for n in range(N):
-            accepted = False
-            x = 0.0
-            while not accepted:
-                u1 = up.uniform()
-                x = self.eta - (1.0/self.beta) * jnp.log(1 - u1)
-                u2 = up.uniform()
-                if u2 <= jnp.exp(-0.5 * (x - self.beta)**2):
-                    accepted = True
-            x_values = x_values.at[n].set(x)
+        def q_one(k):
+            def body(carry):
+                curr_k, *_ = carry
+                curr_k, k2, k3 = jax.random.split(curr_k, 3)
+                u1 = jax.random.uniform(k2)
+                x = self.eta - (1.0 / self.beta) * jnp.log(1 - u1)
+                u2 = jax.random.uniform(k3)
+                accepted = u2 <= jnp.exp(-0.5 * (x - self.beta) ** 2)
+                return curr_k, x, accepted
 
+            _, x_out, _ = jax.lax.while_loop(lambda carry: jnp.logical_not(carry[-1]), body, (k, 0.0, False))
+            return x_out
+
+        keys = jax.random.split(key, N)
+        x_values = jax.vmap(q_one)(keys)
         return x_values
 
     #

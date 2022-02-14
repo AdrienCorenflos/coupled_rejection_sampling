@@ -91,7 +91,10 @@ def test_tp1_tq_inv(u):
 
     tZ = gt.e_alpha_gamma_mu - gt.e_beta_gamma_eta
 
-    x, _, _ = gt.TP1_inv(u)
+    x, iter, err = gt.TP1_inv(u)
+#    print(f"x = {x}")
+#    print(f"iter = {iter}")
+#    print(f"err = {err}")
     err = (jnp.exp(-gt.alpha * (x - gt.mu)) - jnp.exp(-gt.beta * (x - gt.eta))) / tZ - u
 
     np_test.assert_allclose(err, 0.0, atol=1e-2, rtol=1e-2)
