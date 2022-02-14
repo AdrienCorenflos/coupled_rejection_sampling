@@ -8,8 +8,28 @@ from functools import partial
 import jax.numpy as jnp
 import jax.random
 import jax.lax
+import jax.scipy.stats as jstats
 
 from coupled_rejection_sampling.coupled_rejection_sampler import coupled_sampler
+
+class UniformProducer:
+    def __init__(self, key, bufsize, shape=None):
+        self.curr_key, = jax.random.split(key, 1)
+        if shape is None:
+            self.buffer = jax.random.uniform(self.curr_key, shape=(bufsize,))
+        else:
+            self.buffer = jax.random.uniform(self.curr_key, shape=(bufsize,*shape))
+        self.count = 0
+
+    def uniform(self):
+        u = self.buffer[self.count]
+        self.count += 1
+        if self.count >= self.buffer.shape[0]:
+            self.curr_key, = jax.random.split(self.curr_key, 1)
+            self.buffer = jax.random.uniform(self.curr_key, shape=self.buffer.shape)
+            self.count = 0
+        return u
+
 
 
 def get_alpha(mu):
@@ -77,11 +97,11 @@ class GaussTails:
 
         tZ = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
 
-        # Sanity checks
-        if jnp.any(u >= 1):
-            raise ValueError("Need to have u < 1")
-        if jnp.any(u <= 0):
-            raise ValueError("Need to have u > 0")
+        # Sanity checks -- removed, Jax doesn't like these
+#        if jnp.any(u >= 1):
+#            raise ValueError("Need to have u < 1")
+#        if jnp.any(u <= 0):
+#            raise ValueError("Need to have u > 0")
 
         # Initial guess
         q = (self.alpha**2 * self.e_alpha_gamma_mu - self.beta**2 * self.e_beta_gamma_eta) / tZ
@@ -119,11 +139,11 @@ class GaussTails:
 
         Zq = 1 - self.e_alpha_eta_mu + self.e_alpha_gamma_mu - self.e_beta_gamma_eta
 
-        # Sanity checks
-        if jnp.any(u >= 1):
-            raise ValueError("Need to have u < 1")
-        if jnp.any(u <= 0):
-            raise ValueError("Need to have u > 0")
+        # Sanity checks -- removed, Jax doesn't like these
+#        if jnp.any(u >= 1):
+#            raise ValueError("Need to have u < 1")
+#        if jnp.any(u <= 0):
+#            raise ValueError("Need to have u > 0")
 
         # Initial guess
         xp = self.eta
@@ -220,12 +240,38 @@ class GaussTails:
     # Samplers for marginals by using the method from Robert (2009)
     #
     def p(self, key, N=1):
-        # TODO: implement
-        pass
+        # TODO: No unit test yet
+        up = UniformProducer(key, 10 * N, None)
+        x_values = jnp.empty((N,))
+        for n in range(N):
+            accepted = False
+            x = 0.0
+            while not accepted:
+                u1 = up.uniform()
+                x = self.mu - (1.0/self.alpha) * jnp.log(1 - u1)
+                u2 = up.uniform()
+                if u2 <= jnp.exp(-0.5 * (x - self.alpha)**2):
+                    accepted = True
+            x_values = x_values.at[n].set(x)
+
+        return x_values
 
     def q(self, key, N=1):
-        # TODO: implement
-        pass
+        # TODO: No unit test yet
+        up = UniformProducer(key, 10 * N, None)
+        x_values = jnp.empty((N,))
+        for n in range(N):
+            accepted = False
+            x = 0.0
+            while not accepted:
+                u1 = up.uniform()
+                x = self.eta - (1.0/self.beta) * jnp.log(1 - u1)
+                u2 = up.uniform()
+                if u2 <= jnp.exp(-0.5 * (x - self.beta)**2):
+                    accepted = True
+            x_values = x_values.at[n].set(x)
+
+        return x_values
 
     #
     # ATTN: We actually put log_p = log( p / p_hat ), log_p_hat = 0, M_p = 1 and the same for q

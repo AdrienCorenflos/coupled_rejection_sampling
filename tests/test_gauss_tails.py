@@ -11,6 +11,31 @@ config.update("jax_enable_x64", True)
 
 import coupled_rejection_sampling.gauss_tails as gauss_tails
 
+def test_uniform_1():
+    key = jax.random.PRNGKey(1)
+    up = gauss_tails.UniformProducer(key, 4, None)
+
+    values = jnp.empty((10,))
+    for i in range(values.shape[0]):
+        u = up.uniform()
+        values = values.at[i].set(u)
+
+    assert jnp.unique(values).shape[0] == values.shape[0]
+
+
+def test_uniform_2():
+    key = jax.random.PRNGKey(1)
+    N = 3
+    up = gauss_tails.UniformProducer(key, 2, (N,))
+    values = jnp.empty((10,N))
+    for i in range(values.shape[0]):
+        u = up.uniform()
+        assert u.shape[0] == N
+        values = values.at[i].set(u)
+
+    assert jnp.unique(values.flatten()).shape[0] == values.flatten().shape[0]
+
+
 @pytest.mark.parametrize("mu", [1.0, 2.0, 3.0])
 @pytest.mark.parametrize("eta_mu", [1.0, 2.0])
 def test_c_dens(mu, eta_mu):
