@@ -10,15 +10,12 @@ import jax.numpy as jnp
 import jax.scipy.linalg as jlinalg
 import numpy as np
 import pandas as pd
-import tikzplotlib
 import tqdm.auto as tqdm
 from jax.scipy.stats import norm
 from matplotlib import pyplot as plt
-from matplotlib.ticker import FormatStrFormatter
 
 from coupled_rejection_sampling.mvn import coupled_mvns, mvn_logpdf
 from coupled_rejection_sampling.thorisson import modified_thorisson
-
 
 JAX_KEY = jax.random.PRNGKey(0)
 K = 10_000  # number of experiments
@@ -121,6 +118,7 @@ def sample_coupled_chain(key, eps, sampler, log_pi, D):
         op_key, sample_key = jax.random.split(op_key, 2)
         x, y, coupled = simplified_manifold_mala_step(sample_key, x, y, eps, sampler, log_pi)
         return op_key, x, y, iteration + 1, coupled
+
     *_, meeting_time, _ = jax.lax.while_loop(cond, body, (key, x0, y0, 0, False))
     return meeting_time
 
@@ -208,68 +206,15 @@ if PLOT:
     rejection_df.loc[("meeting time", "mean")] = [f"${v.mean(-1):.1f}$" for v in data["rejection_meeting_times"]]
     rejection_df.loc[("run time (s)", "mean")] = [f"${v.mean(-1):.1e}$" for v in data["rejection_runtime"][:, 1:]]
 
+    thorisson_df.loc[("meeting time", "standard deviation")] = [f"${v.std(-1):.1f}$" for v in
+                                                                data["thorisson_meeting_times"]]
+    thorisson_df.loc[("run time (s)", "standard deviation")] = [f"${v.std(-1):.1e}$" for v in
+                                                                data["thorisson_runtime"][:, 1:]]
 
-    thorisson_df.loc[("meeting time", "standard deviation")] = [f"${v.std(-1):.1f}$" for v in data["thorisson_meeting_times"]]
-    thorisson_df.loc[("run time (s)", "standard deviation")] = [f"${v.std(-1):.1e}$" for v in data["thorisson_runtime"][:, 1:]]
-
-    rejection_df.loc[("meeting time", "standard deviation")] = [f"${v.std(-1):.1f}$" for v in data["rejection_meeting_times"]]
-    rejection_df.loc[("run time (s)", "standard deviation")] = [f"${v.std(-1):.1e}$" for v in data["rejection_runtime"][:, 1:]]
-
+    rejection_df.loc[("meeting time", "standard deviation")] = [f"${v.std(-1):.1f}$" for v in
+                                                                data["rejection_meeting_times"]]
+    rejection_df.loc[("run time (s)", "standard deviation")] = [f"${v.std(-1):.1e}$" for v in
+                                                                data["rejection_runtime"][:, 1:]]
 
     print(rejection_df.to_latex("out/rejection_mmala.tex"))
     print(thorisson_df.to_latex("out/thorisson_mmala.tex"))
-    # for i, D in enumerate(DS):
-    #     axes[0].set_title("Rejection")
-    #     axes[0].set_xscale("log")
-    #     axes[0].set_yscale("log")
-    #     axes[0].plot(data["NS"], data["rejection_meeting_times"][i].mean(-1).mean(-1),
-    #                  color=cmap(i), label=f"$D={D}$")
-    #     axes[0].fill_between(data["NS"],
-    #                          data["rejection_meeting_times"][i].mean(-1).mean(-1) - 1.96 *
-    #                          data["rejection_meeting_times"][i].mean(-1).std(-1),
-    #                          data["rejection_meeting_times"][i].mean(-1).mean(-1) + 1.96 *
-    #                          data["rejection_meeting_times"][i].mean(-1).std(-1),
-    #                          color=cmap(i), alpha=0.66)
-    #
-    #     axes[1].set_title("Thorisson")
-    #     axes[1].plot(data["CS"], data["thorisson_meeting_times"][i].mean(-1).mean(-1),
-    #                  color=cmap(i), label=f"$D={D}$")
-    #     axes[1].fill_between(data["CS"],
-    #                          data["thorisson_meeting_times"][i].mean(-1).mean(-1) - 1.96 *
-    #                          data["thorisson_meeting_times"][i].mean(-1).std(-1),
-    #                          data["thorisson_meeting_times"][i].mean(-1).mean(-1) + 1.96 *
-    #                          data["thorisson_meeting_times"][i].mean(-1).std(-1),
-    #                          color=cmap(i), alpha=0.66)
-    #     axes[1].set_yscale("log")
-    #     axes[1].xaxis.set_major_formatter(FormatStrFormatter('%.1f'))
-    # axes[1].legend()
-    # tikzplotlib.save("out/gibbs_meeting_time.tikz")
-    #
-    # fig, axes = plt.subplots(ncols=2, figsize=(15, 6), sharey=True)
-    #
-    # for i, D in enumerate(DS):
-    #     axes[0].set_title("Rejection")
-    #     axes[0].set_xscale("log")
-    #     axes[0].set_yscale("log")
-    #     axes[0].plot(data["NS"], data["rejection_runtime"][i].mean(-1),
-    #                  color=cmap(i), label=f"$D={D}$")
-    #     axes[0].fill_between(data["NS"],
-    #                          data["rejection_runtime"][i].mean(-1) - 1.96 *
-    #                          data["rejection_runtime"][i].std(-1),
-    #                          data["rejection_runtime"][i].mean(-1) + 1.96 *
-    #                          data["rejection_runtime"][i].std(-1),
-    #                          color=cmap(i), alpha=0.66)
-    #     axes[1].set_title("Thorisson")
-    #     axes[1].plot(data["CS"], data["thorisson_runtime"][i].mean(-1),
-    #                  color=cmap(i), label=f"$D={D}$")
-    #     axes[1].fill_between(data["CS"],
-    #                          data["thorisson_runtime"][i].mean(-1) - 1.96 *
-    #                          data["thorisson_runtime"][i].std(-1),
-    #                          data["thorisson_runtime"][i].mean(-1) + 1.96 *
-    #                          data["thorisson_runtime"][i].std(-1),
-    #                          color=cmap(i), alpha=0.66)
-    #     axes[1].set_yscale("log")
-    #     axes[1].xaxis.set_major_formatter(FormatStrFormatter('%.1f'))
-    # axes[1].legend()
-    #
-    # tikzplotlib.save("out/gibbs_run_time.tikz")
