@@ -3,25 +3,186 @@
 # and hatq(x) = beta exp(-beta (x - eta)) similarly to Robert (1995), but with the coupling.
 #
 # Robert, C. P. (1995). Simulation of truncated normal variables. Statistics and Computing, Volume 5, pages 121–125.
-
-import math
-from functools import partial
-
+import chex as chex
+import jax.lax
 import jax.numpy as jnp
 import jax.random
-import jax.lax
 import jax.scipy.stats as jstats
+from jax.experimental.host_callback import id_print
 
 from coupled_rejection_sampling.coupled_rejection_sampler import coupled_sampler
+from coupled_rejection_sampling.utils import logsubexp, log1mexp
+
+
+def coupled_gaussian_tails(key: jnp.ndarray,
+                           mu: float, eta: float, N: int = 1):
+    """
+    A coupled version of Robert's truncated normal sampling algorithm.
+    We want to sample from 2 different tails x > mu and x > eta of a N(x | 0,1) Gaussian
+
+    Parameters
+    ----------
+    key: jnp.ndarray
+        JAX random key
+    mu, eta: float
+        The tails of the Gaussians we want to sample from
+    N: int, optional
+        The number of particles to be used in the ensemble. Default is 1, which reduces to simple coupled
+        rejection sampling.
+
+    Returns
+    -------
+    X: float
+        The sample from x > mu
+    Y: float
+        The sample from x > eta
+    n_trials: int
+        The number of trials before acceptance
+    is_coupled: bool
+        Coupling flag
+    """
+    chex.assert_scalar_non_negative(eta - mu)
+    alpha_mu = get_alpha(mu)
+    alpha_eta = get_alpha(eta)
+
+    # Sample from the marginals if no
+    init_key, coupling_key = jax.random.split(key)
+    x_init = _robert_sampler(init_key, mu, alpha_mu)
+    y_init = _robert_sampler(init_key, eta, alpha_eta)
+
+    gamma = get_gamma(mu, eta, alpha_mu, alpha_eta)
+
+    eta_mu = -alpha_mu * (eta - mu)
+    gamma_mu = -alpha_mu * (gamma - mu)
+    gamma_eta = -alpha_eta * (gamma - eta)
+
+
+def coupled_exponentials(key, mu, alpha_mu, eta, alpha_eta):
+    chex.assert_scalar_non_negative(eta - mu)
+
+    gamma = get_gamma(mu, eta, alpha_mu, alpha_eta)
+
+    eta_mu = -alpha_mu * (eta - mu)
+    gamma_mu = -alpha_mu * (gamma - mu)
+    gamma_eta = -alpha_eta * (gamma - eta)
+
+    log_max_coupling_proba = logsubexp(eta_mu, jnp.logaddexp(gamma_mu, gamma_eta))
+
+    subkey1, subkey2 = jax.random.split(key)
+
+    log_u = jnp.log(jax.random.uniform(subkey1, shape=()))
+    are_coupled = (log_u <= log_max_coupling_proba)
+
+    def if_coupled(k):
+        x = _sampled_from_coupled_exponentials(k, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma_mu, gamma_eta, gamma)
+        return x, x
+
+    def otherwise(k):
+        x = _sample_from_first_marginal(k, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma_mu, gamma_eta, gamma)
+        y = _sample_from_second_marginal(k, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma_mu, gamma_eta, gamma)
+        return x, y
+
+    return *jax.lax.cond(are_coupled, if_coupled, otherwise, subkey2), are_coupled
+
+
+def _sampled_from_coupled_exponentials(key, mu, _eta, alpha_mu, alpha_eta, eta_mu, gamma_mu, gamma_eta, gamma):
+    def C1_inv(u):
+        log_u = jnp.log(u)
+        return mu - logsubexp(eta_mu, log_u + logsubexp(eta_mu, gamma_mu)) / alpha_mu
+
+    def C2_inv(u):
+        return gamma - jnp.log(1.0 - u) / alpha_eta
+
+    log_p1 = logsubexp(eta_mu, gamma_mu)
+    log_p2 = gamma_eta
+    log_p = log_p1 - jnp.logaddexp(log_p1, log_p2)
+
+    u1, u2 = jax.random.uniform(key, shape=(2,))
+
+    res = jax.lax.cond(jnp.log(u1) < log_p, C1_inv, C2_inv, u2)
+    return res
+
+
+def _sample_from_first_marginal(key, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma_mu, gamma_eta, gamma):
+    key1, key2 = jax.random.split(key, 2)
+    log_u1 = jnp.log(jax.random.uniform(key1))
+
+    log_p1 = logsubexp(gamma_mu, gamma_eta)
+    log_p2 = log1mexp(eta_mu)
+    log_p = log_p1 - jnp.logaddexp(log_p1, log_p2)
+
+    log_tZ = logsubexp(gamma_mu, gamma_eta)
+    log_M = jnp.log(alpha_eta) - log_tZ + gamma_eta + jnp.log(alpha_eta - alpha_mu) - 2 * jnp.log(alpha_mu)
+
+    def _sample_from_tail(k):
+        log_u = jnp.log(jax.random.uniform(k))
+        return mu - log1mexp(log_u + log1mexp(eta_mu)) / alpha_mu
+
+    def _sample_from_overlap(k):
+        def body(carry):
+            curr_k, *_ = carry
+            curr_k, k2, k3 = jax.random.split(curr_k, 3)
+            x = gamma_random(k2, 2, alpha_mu, gamma)
+
+            log_density_1 = logsubexp(texp_logpdf(x, mu, alpha_mu),
+                                      texp_logpdf(x, eta, alpha_eta)) - log_tZ
+            log_density_2 = gamma_logpdf(x, 2, alpha_mu, gamma)
+
+            log_u = jnp.log(jax.random.uniform(k3))
+            accepted = log_u < log_density_1 - log_density_2 - log_M
+            return curr_k, x, accepted
+
+        _, x_out, _ = jax.lax.while_loop(lambda carry: jnp.logical_not(carry[-1]), body, (k, 0., False))
+        return x_out
+
+    return jax.lax.cond(log_u1 < log_p, _sample_from_overlap, _sample_from_tail, key2)
+
+
+def _sample_from_second_marginal(key, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma_mu, gamma_eta, _gamma):
+    log_Zq = log1mexp(logsubexp(jnp.logaddexp(eta_mu, gamma_mu), gamma_eta))
+    log_M = -log_Zq
+
+    def body(carry):
+        curr_k, *_ = carry
+        curr_k, k2 = jax.random.split(curr_k, 2)
+        u1, u2 = jax.random.uniform(k2, shape=(2,))
+        x = eta - jnp.log(1 - u1) / alpha_eta
+        log_density_1 = logsubexp(texp_logpdf(x, eta, alpha_eta),
+                                  texp_logpdf(x, mu, alpha_mu)) - log_Zq
+
+        log_density_2 = jstats.expon.logpdf(x, eta, alpha_eta)
+        accepted = jnp.log(u2) < log_density_1 - log_density_2 - log_M
+        return curr_k, x, accepted
+
+    _, x_out, _ = jax.lax.while_loop(lambda carry: jnp.logical_not(carry[-1]), body, (key, 0., False))
+    return x_out
+
+
+def _robert_sampler(key, mu, alpha):
+    def body(carry):
+        curr_k, *_ = carry
+        curr_k, subkey = jax.random.split(curr_k, 2)
+
+        u1, u2 = jax.random.uniform(subkey, shape=(2,))
+
+        x = mu - jnp.log(1 - u1) / alpha
+        accepted = u2 <= jnp.exp(-0.5 * (x - alpha) ** 2)
+
+        return curr_k, x, accepted
+
+    _, x_out, _ = jax.lax.while_loop(lambda carry: ~carry[-1], body, (key, 0., False))
+    return x_out
 
 
 def get_alpha(mu):
     """ Compute the optimal alpha as per Robert (1995) """
     return 0.5 * (mu + jnp.sqrt(mu ** 2 + 4))
 
+
 def get_gamma(mu, eta, alpha, beta):
     """ Threshold when hatp(x) = hatq(x) """
     return (jnp.log(beta) - jnp.log(alpha) + beta * eta - alpha * mu) / (beta - alpha)
+
 
 def texp_logpdf(x, mu, alpha):
     """ Translated exponential density """
@@ -34,9 +195,10 @@ def gamma_logpdf(x, a, b, mu):
                      a * jnp.log(b) - jax.scipy.special.gammaln(a) + (a - 1.0) * jnp.log(x - mu) - b * (x - mu),
                      -jnp.inf)
 
-def gamma_random(key, a, b, mu, N=1):
+
+def gamma_random(key, a, b, mu):
     """ Draw Gamma random variables """
-    return mu + jax.random.gamma(key, a, shape=(N,)) / b
+    return mu + jax.random.gamma(key, a) / b
 
 
 class GaussTails:
@@ -82,10 +244,11 @@ class GaussTails:
         p1 = self.e_alpha_eta_mu - self.e_alpha_gamma_mu
         p2 = self.e_beta_gamma_eta
         p = p1 / (p1 + p2)
+        id_print(jnp.log(p), what="log_p_true")
 
-        u12 = jax.random.uniform(key, shape=(N,2))
-        u1 = u12[:,0]
-        u2 = u12[:,1]
+        u12 = jax.random.uniform(key, shape=(N, 2))
+        u1 = u12[:, 0]
+        u2 = u12[:, 1]
 
         return jnp.where(u1 < p, C1_inv(u2), C2_inv(u2))
 
@@ -98,17 +261,20 @@ class GaussTails:
         tZ = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
 
         # Initial guess
-        q = (self.alpha**2 * self.e_alpha_gamma_mu - self.beta**2 * self.e_beta_gamma_eta) / tZ
+        q = (self.alpha ** 2 * self.e_alpha_gamma_mu - self.beta ** 2 * self.e_beta_gamma_eta) / tZ
         xp1 = self.gamma + jnp.sqrt(2.0 * (u - 1.0) / q)  # Using quadratic fit at x = gamma
-        d = (jnp.exp(self.alpha * self.mu) - jnp.exp(self.beta * self.eta) * jnp.exp(-(self.beta - self.alpha) * self.gamma)) / tZ
-        xp2 = -(1.0 / self.alpha) * jnp.log(u / d)       # Using lower bounding exponential for x >= gamma
+        d = (jnp.exp(self.alpha * self.mu) - jnp.exp(self.beta * self.eta) * jnp.exp(
+            -(self.beta - self.alpha) * self.gamma)) / tZ
+        xp2 = -(1.0 / self.alpha) * jnp.log(u / d)  # Using lower bounding exponential for x >= gamma
         init_xp = jnp.max(jnp.stack([xp1, xp2]), axis=0)
 
         def log_f(x):
-            return jnp.log((jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta))) / tZ) - jnp.log(u)
+            return jnp.log(
+                (jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta))) / tZ) - jnp.log(u)
 
         def log_df(x):
-            return (-self.alpha * jnp.exp(-self.alpha * (x - self.mu)) + self.beta * jnp.exp(-self.beta * (x - self.eta))) \
+            return (-self.alpha * jnp.exp(-self.alpha * (x - self.mu)) + self.beta * jnp.exp(
+                -self.beta * (x - self.eta))) \
                    / (jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta)))
 
         def body(carry):
@@ -117,14 +283,13 @@ class GaussTails:
             ldf = log_df(xp)
             xp = xp - lf / ldf
             err = jnp.exp(lf + jnp.log(u)) - u  # Actual error
-            return xp, i+1, err
+            return xp, i + 1, err
 
         def cond(carry):
             xp, i, err = carry
             return jnp.logical_and(i < max_iter, jnp.abs(err).max() > err_thr)
 
         return jax.lax.while_loop(cond, body, (init_xp, 0, 100.0 * jnp.ones_like(init_xp)))
-
 
     def TQ_inv(self, u, max_iter=50, err_thr=1e-10):
         """ Solve the equation (exp(-beta (x - eta) + exp(-alpha (eta - mu)) - exp(-alpha (x - mu))) / Zq = 1/Zq - u
@@ -138,27 +303,27 @@ class GaussTails:
         init_xp = self.eta * jnp.ones_like(u)
 
         def log_f(x):
-            return jnp.log((self.e_alpha_eta_mu - jnp.exp(-self.alpha*(x - self.mu))
-                            + jnp.exp(-self.beta * (x - self.eta))) / Zq) - jnp.log(1.0/Zq-u)
+            return jnp.log((self.e_alpha_eta_mu - jnp.exp(-self.alpha * (x - self.mu))
+                            + jnp.exp(-self.beta * (x - self.eta))) / Zq) - jnp.log(1.0 / Zq - u)
 
         def log_df(x):
-            return (self.alpha * jnp.exp(-self.alpha*(x - self.mu)) - self.beta * jnp.exp(-self.beta * (x - self.eta))) \
-                   / (self.e_alpha_eta_mu - jnp.exp(-self.alpha * (x-self.mu)) + jnp.exp(-self.beta * (x - self.eta)))
+            return (self.alpha * jnp.exp(-self.alpha * (x - self.mu)) - self.beta * jnp.exp(
+                -self.beta * (x - self.eta))) \
+                   / (self.e_alpha_eta_mu - jnp.exp(-self.alpha * (x - self.mu)) + jnp.exp(-self.beta * (x - self.eta)))
 
         def body(carry):
             xp, i, err = carry
             lf = log_f(xp)
             ldf = log_df(xp)
             xp = xp - lf / ldf
-            err = jnp.exp(lf + jnp.log(1.0/Zq-u)) - 1.0/Zq + u  # Actual error
-            return xp, i+1, err
+            err = jnp.exp(lf + jnp.log(1.0 / Zq - u)) - 1.0 / Zq + u  # Actual error
+            return xp, i + 1, err
 
         def cond(carry):
             xp, i, err = carry
             return jnp.logical_and(i < max_iter, jnp.abs(err).max() > err_thr)
 
         return jax.lax.while_loop(cond, body, (init_xp, 0, 100.0 * jnp.ones_like(init_xp)))
-
 
     def tp_logpdf(self, x):
         """ Evaluate tildep(x) \propto p(x) - min(p(x),q(x)) """
@@ -171,16 +336,16 @@ class GaussTails:
 
     def tp_sample_icdf(self, key, N=1):
         """ Sample from tildep(x) \propto p(x) - min(p(x),q(x)) using icdf method """
-        u12 = jax.random.uniform(key, shape=(N,2))
-        u1 = u12[:,0]
-        u2 = u12[:,1]
+        u12 = jax.random.uniform(key, shape=(N, 2))
+        u1 = u12[:, 0]
+        u2 = u12[:, 1]
 
         p1 = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
         p2 = 1 - self.e_alpha_eta_mu
         p = p1 / (p1 + p2)
 
         def TP2_inv(u):
-            return self.mu - (1.0/self.alpha) * jnp.log(1.0 - u * (1 - self.e_alpha_eta_mu))
+            return self.mu - (1.0 / self.alpha) * jnp.log(1.0 - u * (1 - self.e_alpha_eta_mu))
 
         return jnp.where(u1 < p, self.TP1_inv(u2)[0], TP2_inv(u2))
 
@@ -193,7 +358,7 @@ class GaussTails:
             def body(carry):
                 curr_k, *_ = carry
                 curr_k, k2, k3 = jax.random.split(curr_k, 3)
-                x = gamma_random(k2, 2, self.alpha, self.gamma)[0]
+                x = gamma_random(k2, 2, self.alpha, self.gamma)
                 dens1 = jnp.where(x >= self.gamma,
                                   (jnp.exp(texp_logpdf(x, self.mu, self.alpha))
                                    - jnp.exp(texp_logpdf(x, self.eta, self.beta))) / tZ, 0.0)
@@ -209,23 +374,20 @@ class GaussTails:
         x_values = jax.vmap(tp1_sample_rs_one)(keys)
         return x_values
 
-
     def tp_sample_rs(self, key, N=1):
         """ Sample from tildep(x) \propto p(x) - min(p(x),q(x)) using RS method """
         key1, key2 = jax.random.split(key, 2)
-        u12 = jax.random.uniform(key1, shape=(N,2))
-        u1 = u12[:,0]
-        u2 = u12[:,1]
+        u12 = jax.random.uniform(key1, shape=(N, 2))
+        u1 = u12[:, 0]
+        u2 = u12[:, 1]
 
         p1 = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
         p2 = 1 - self.e_alpha_eta_mu
         p = p1 / (p1 + p2)
-
         def TP2_inv(u):
-            return self.mu - (1.0/self.alpha) * jnp.log(1.0 - u * (1 - self.e_alpha_eta_mu))
+            return self.mu - (1.0 / self.alpha) * jnp.log(1.0 - u * (1 - self.e_alpha_eta_mu))
 
         return jnp.where(u1 < p, self.tp1_sample_rs(key2, N), TP2_inv(u2))
-
 
     def tq_logpdf(self, x):
         """ Evaluate tildeq(x) \propto q(x) - min(p(x),q(x)) """
@@ -239,7 +401,6 @@ class GaussTails:
         """ Sample from tildeq(x) \propto q(x) - min(p(x),q(x)) with icdf method """
         u = jax.random.uniform(key, shape=(N,))
         return self.TQ_inv(u)[0]
-
 
     def tq_sample_rs(self, key, N=1):
         """ Sample from tildeq(x) \propto q(x) - min(p(x),q(x)) with rejection sampling method """
@@ -267,7 +428,6 @@ class GaussTails:
         x_values = jax.vmap(tq_sample_rs_one)(keys)
         return x_values
 
-
     def Gamma_hat_icdf(self, key, N=1):
         """ Sample from coupling of translated exponentials with icdf methods """
         # TODO: no unit test for this yet
@@ -284,8 +444,6 @@ class GaussTails:
         xs = jnp.where(are_coupled, c_samples, tp_samples)
         ys = jnp.where(are_coupled, c_samples, tq_samples)
         return xs, ys, are_coupled
-
-
 
     def Gamma_hat_rs(self, key, N=1):
         """ Sample from coupling of translated exponentials with part RS methods """
@@ -368,11 +526,12 @@ class GaussTails:
     #
     def coupled_gauss_tails_icdf(self, key, N=1):
         # TODO: Not tested at all
-        return coupled_sampler(key, self.Gamma_hat_icdf, lambda x: self.p(x)[0], lambda x: self.q(x)[0], self.log_p_hat, self.log_q_hat,
+        return coupled_sampler(key, self.Gamma_hat_icdf, lambda x: self.p(x)[0], lambda x: self.q(x)[0], self.log_p_hat,
+                               self.log_q_hat,
                                self.log_p, self.log_q, 0.0, 0.0, N)
 
     def coupled_gauss_tails_rs(self, key, N=1):
         # TODO: Not tested at all
-        return coupled_sampler(key, self.Gamma_hat_rs, lambda x: self.p(x)[0], lambda x: self.q(x)[0], self.log_p_hat, self.log_q_hat,
+        return coupled_sampler(key, self.Gamma_hat_rs, lambda x: self.p(x)[0], lambda x: self.q(x)[0], self.log_p_hat,
+                               self.log_q_hat,
                                self.log_p, self.log_q, 0.0, 0.0, N)
-

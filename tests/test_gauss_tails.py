@@ -586,3 +586,30 @@ def test_coupled_sampling_rs_10():
     print(f"pxy2 = {pxy2}")
 
     np_test.assert_allclose(pxy1, pxy2, atol=1e-1, rtol=1e-1) # Not very close
+
+
+def test_coupled_exponentials():
+    N = 1_000_000
+    B = 100
+
+    mu = 5.1
+    eta = 5.3
+
+    alpha_mu = gauss_tails.get_alpha(mu)
+    alpha_eta = gauss_tails.get_alpha(eta)
+
+    vmapped_sampler = jax.jit(jax.vmap(lambda k: gauss_tails.coupled_exponentials(k, mu, alpha_mu, eta, alpha_eta)))
+
+    x_mean = 0.
+    y_mean = 0.
+    for i in range(B):
+        key = jax.random.PRNGKey(i)
+        keys = jax.random.split(key, N)
+        xs, ys, coupled = vmapped_sampler(keys)
+        x_mean = (i * x_mean + xs.mean()) / (i+1)
+        y_mean = (i * y_mean + ys.mean()) / (i+1)
+
+    np.testing.assert_equal(x_mean, mu + 1 / alpha_mu)
+    np.testing.assert_equal(y_mean, eta + 1 / alpha_eta)
+
+
