@@ -8,6 +8,7 @@ import jax.lax
 import jax.numpy as jnp
 import jax.random
 import jax.scipy.stats as jstats
+import tensorflow_probability.substrates.jax as tfp
 from jax.experimental.host_callback import id_print
 
 from coupled_rejection_sampling.coupled_rejection_sampler import coupled_sampler
@@ -45,16 +46,23 @@ def coupled_gaussian_tails(key: jnp.ndarray,
     alpha_mu = get_alpha(mu)
     alpha_eta = get_alpha(eta)
 
-    # Sample from the marginals if no
-    init_key, coupling_key = jax.random.split(key)
-    x_init = _robert_sampler(init_key, mu, alpha_mu)
-    y_init = _robert_sampler(init_key, eta, alpha_eta)
+    vmapped_coupled_sampler = jax.vmap(lambda k: coupled_exponentials(k, mu, alpha_mu, eta, alpha_eta))
 
-    gamma = get_gamma(mu, eta, alpha_mu, alpha_eta)
+    def Gamma_hat(k, M):
+        keys = jax.random.split(k, M)
+        return vmapped_coupled_sampler(keys)
 
-    eta_mu = -alpha_mu * (eta - mu)
-    gamma_mu = -alpha_mu * (gamma - mu)
-    gamma_eta = -alpha_eta * (gamma - eta)
+    p = lambda k: _robert_sampler(k, mu, alpha_mu)
+    q = lambda k: _robert_sampler(k, eta, alpha_eta)
+
+    log_p = lambda x: -0.5 * (x - alpha_mu) ** 2
+    log_q = lambda x: -0.5 * (x - alpha_eta) ** 2
+
+    log_pq_hat = lambda x: jnp.zeros_like(x)
+
+    # ATTN: We actually put log_p = log( p / p_hat ), log_p_hat = 0, M_p = 1 and the same for q
+    # to avoid explicit evaluation of p and p_hat and M.
+    return coupled_sampler(key, Gamma_hat, p, q, log_pq_hat, log_pq_hat, log_p, log_q, 0., 0., N)
 
 
 def coupled_exponentials(key, mu, alpha_mu, eta, alpha_eta):
@@ -112,50 +120,43 @@ def _sample_from_first_marginal(key, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma
     log_p = log_p1 - jnp.logaddexp(log_p1, log_p2)
 
     log_tZ = logsubexp(gamma_mu, gamma_eta)
-    log_M = jnp.log(alpha_eta) - log_tZ + gamma_eta + jnp.log(alpha_eta - alpha_mu) - 2 * jnp.log(alpha_mu)
 
-    def _sample_from_tail(k):
-        log_u = jnp.log(jax.random.uniform(k))
+    def _sample_from_tail(log_u):
         return mu - log1mexp(log_u + log1mexp(eta_mu)) / alpha_mu
 
-    def _sample_from_overlap(k):
-        def body(carry):
-            curr_k, *_ = carry
-            curr_k, k2, k3 = jax.random.split(curr_k, 3)
-            x = gamma_random(k2, 2, alpha_mu, gamma)
+    def _sample_from_overlap(log_u):
+        # upper bound
+        log_d = logsubexp(alpha_mu * mu, alpha_eta * eta - (alpha_eta - alpha_mu) * gamma) - log_tZ
+        xp2 = -(1.0 / alpha_eta) * (log_u - log_d)
 
-            log_density_1 = logsubexp(texp_logpdf(x, mu, alpha_mu),
-                                      texp_logpdf(x, eta, alpha_eta)) - log_tZ
-            log_density_2 = gamma_logpdf(x, 2, alpha_mu, gamma)
+        def log_f(x):
+            return logsubexp(alpha_mu * (x - mu), - alpha_eta * (x - eta) * gamma) - log_tZ - log_u
 
-            log_u = jnp.log(jax.random.uniform(k3))
-            accepted = log_u < log_density_1 - log_density_2 - log_M
-            return curr_k, x, accepted
+        res, *_ = tfp.math.find_root_chandrupatla(log_f, gamma, xp2, position_tolerance=1e-6,
+                                                  value_tolerance=1e-6)
 
-        _, x_out, _ = jax.lax.while_loop(lambda carry: jnp.logical_not(carry[-1]), body, (k, 0., False))
-        return x_out
+        return res
 
-    return jax.lax.cond(log_u1 < log_p, _sample_from_overlap, _sample_from_tail, key2)
+    return jax.lax.cond(log_u1 < log_p, _sample_from_overlap, _sample_from_tail, jnp.log(jax.random.uniform(key2)))
 
 
-def _sample_from_second_marginal(key, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma_mu, gamma_eta, _gamma):
+def _sample_from_second_marginal(key, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma_mu, gamma_eta, gamma):
     log_Zq = log1mexp(logsubexp(jnp.logaddexp(eta_mu, gamma_mu), gamma_eta))
-    log_M = -log_Zq
+    log_u = jnp.log(jax.random.uniform(key))
 
-    def body(carry):
-        curr_k, *_ = carry
-        curr_k, k2 = jax.random.split(curr_k, 2)
-        u1, u2 = jax.random.uniform(k2, shape=(2,))
-        x = eta - jnp.log(1 - u1) / alpha_eta
-        log_density_1 = logsubexp(texp_logpdf(x, eta, alpha_eta),
-                                  texp_logpdf(x, mu, alpha_mu)) - log_Zq
+    # upper bound
+    log_d = logsubexp(alpha_mu * mu, alpha_eta * eta - (alpha_eta - alpha_mu) * gamma) - log_Zq
+    xp2 = -(1.0 / alpha_eta) * (log_u - log_d)
 
-        log_density_2 = jstats.expon.logpdf(x, eta, alpha_eta)
-        accepted = jnp.log(u2) < log_density_1 - log_density_2 - log_M
-        return curr_k, x, accepted
+    def log_f(x):
+        res = logsubexp(eta_mu, -alpha_mu * (x - mu))
+        res = jnp.logaddexp(res, -alpha_eta * (x - eta)) - log_Zq - logsubexp(-log_Zq, log_u)
+        return res
 
-    _, x_out, _ = jax.lax.while_loop(lambda carry: jnp.logical_not(carry[-1]), body, (key, 0., False))
-    return x_out
+    out, objective_at_estimated_root, *_ = tfp.math.find_root_chandrupatla(log_f, gamma, xp2, position_tolerance=1e-6,
+                                                                           value_tolerance=1e-6)
+
+    return out
 
 
 def _robert_sampler(key, mu, alpha):
@@ -258,38 +259,54 @@ class GaussTails:
 
         # TODO: This could be reimplemented as vectorized map over u
 
+        # tZ = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
+        #
+        # # Initial guess
+        # q = (self.alpha ** 2 * self.e_alpha_gamma_mu - self.beta ** 2 * self.e_beta_gamma_eta) / tZ
+        # xp1 = self.gamma + jnp.sqrt(2.0 * (u - 1.0) / q)  # Using quadratic fit at x = gamma
+        # d = (jnp.exp(self.alpha * self.mu) - jnp.exp(self.beta * self.eta) * jnp.exp(
+        #     -(self.beta - self.alpha) * self.gamma)) / tZ
+        # xp2 = -(1.0 / self.alpha) * jnp.log(u / d)  # Using lower bounding exponential for x >= gamma
+        # init_xp = jnp.max(jnp.stack([xp1, xp2]), axis=0)
+        #
+        # def log_f(x):
+        #     return jnp.log(
+        #         (jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta))) / tZ) - jnp.log(u)
+        #
+        # def log_df(x):
+        #     return (-self.alpha * jnp.exp(-self.alpha * (x - self.mu)) + self.beta * jnp.exp(
+        #         -self.beta * (x - self.eta))) \
+        #            / (jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta)))
+        #
+        # def body(carry):
+        #     xp, i, err = carry
+        #     lf = log_f(xp)
+        #     ldf = log_df(xp)
+        #     xp = xp - lf / ldf
+        #     err = jnp.exp(lf + jnp.log(u)) - u  # Actual error
+        #     return xp, i + 1, err
+        #
+        # def cond(carry):
+        #     xp, i, err = carry
+        #     return jnp.logical_and(i < max_iter, jnp.abs(err).max() > err_thr)
+        #
+        # return jax.lax.while_loop(cond, body, (init_xp, 0, 100.0 * jnp.ones_like(init_xp)))
+        # TODO: This could be reimplemented as vectorized map over u
+
         tZ = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
 
         # Initial guess
-        q = (self.alpha ** 2 * self.e_alpha_gamma_mu - self.beta ** 2 * self.e_beta_gamma_eta) / tZ
-        xp1 = self.gamma + jnp.sqrt(2.0 * (u - 1.0) / q)  # Using quadratic fit at x = gamma
         d = (jnp.exp(self.alpha * self.mu) - jnp.exp(self.beta * self.eta) * jnp.exp(
             -(self.beta - self.alpha) * self.gamma)) / tZ
         xp2 = -(1.0 / self.alpha) * jnp.log(u / d)  # Using lower bounding exponential for x >= gamma
-        init_xp = jnp.max(jnp.stack([xp1, xp2]), axis=0)
 
         def log_f(x):
             return jnp.log(
                 (jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta))) / tZ) - jnp.log(u)
 
-        def log_df(x):
-            return (-self.alpha * jnp.exp(-self.alpha * (x - self.mu)) + self.beta * jnp.exp(
-                -self.beta * (x - self.eta))) \
-                   / (jnp.exp(-self.alpha * (x - self.mu)) - jnp.exp(-self.beta * (x - self.eta)))
+        res, *_ = tfp.math.find_root_chandrupatla(log_f, self.gamma, xp2)
 
-        def body(carry):
-            xp, i, err = carry
-            lf = log_f(xp)
-            ldf = log_df(xp)
-            xp = xp - lf / ldf
-            err = jnp.exp(lf + jnp.log(u)) - u  # Actual error
-            return xp, i + 1, err
-
-        def cond(carry):
-            xp, i, err = carry
-            return jnp.logical_and(i < max_iter, jnp.abs(err).max() > err_thr)
-
-        return jax.lax.while_loop(cond, body, (init_xp, 0, 100.0 * jnp.ones_like(init_xp)))
+        return res
 
     def TQ_inv(self, u, max_iter=50, err_thr=1e-10):
         """ Solve the equation (exp(-beta (x - eta) + exp(-alpha (eta - mu)) - exp(-alpha (x - mu))) / Zq = 1/Zq - u
@@ -344,10 +361,10 @@ class GaussTails:
         p2 = 1 - self.e_alpha_eta_mu
         p = p1 / (p1 + p2)
 
-        def TP2_inv(u):
-            return self.mu - (1.0 / self.alpha) * jnp.log(1.0 - u * (1 - self.e_alpha_eta_mu))
+        return jnp.where(u1 < p, self.TP1_inv(u2)[0], self.TP2_inv(u2))
 
-        return jnp.where(u1 < p, self.TP1_inv(u2)[0], TP2_inv(u2))
+    def TP2_inv(self, u):
+        return self.mu - (1.0 / self.alpha) * jnp.log(1.0 - u * (1 - self.e_alpha_eta_mu))
 
     def tp1_sample_rs(self, key, N=1):
         """ Sample from tildep1(x) with rejection sampling method """
@@ -384,6 +401,7 @@ class GaussTails:
         p1 = self.e_alpha_gamma_mu - self.e_beta_gamma_eta
         p2 = 1 - self.e_alpha_eta_mu
         p = p1 / (p1 + p2)
+
         def TP2_inv(u):
             return self.mu - (1.0 / self.alpha) * jnp.log(1.0 - u * (1 - self.e_alpha_eta_mu))
 
