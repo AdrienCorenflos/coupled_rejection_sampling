@@ -636,22 +636,29 @@ def test_coupled_exponentials():
 
 def test_stuff():
     from scipy.stats import truncnorm
-    N = 1_000_000
+    N = 100_000
     B = 100
-    mu = 5.1
-    eta = 5.1001
-    vmapped_sampler = jax.vmap(lambda k: gauss_tails.coupled_gaussian_tails(k, mu, eta))
+    mu = 7.1
+    eta = 7.15
+    vmapped_sampler = jax.jit(jax.vmap(lambda k: gauss_tails.coupled_gaussian_tails(k, mu, eta)))
     x_mean = 0.
     y_mean = 0.
+    coupled_mean = 0.
     for i in range(B):
         key = jax.random.PRNGKey(i)
         keys = jax.random.split(key, N)
         xs, ys, coupled, _ = vmapped_sampler(keys)
         x_mean = (i * x_mean + xs.mean()) / (i + 1)
         y_mean = (i * y_mean + ys.mean()) / (i + 1)
+        coupled_mean = (i * coupled_mean + coupled.mean()) / (i + 1)
 
+    print()
     print(x_mean)
     print(truncnorm.mean(mu, np.inf))
-
+    print()
     print(y_mean)
     print(truncnorm.mean(eta, np.inf))
+    print()
+    print(scipy.integrate.quad(lambda x: np.minimum(truncnorm.pdf(x, mu, np.inf), truncnorm.pdf(x, eta, np.inf)),
+                               -np.inf, np.inf))
+    print(coupled_mean)
