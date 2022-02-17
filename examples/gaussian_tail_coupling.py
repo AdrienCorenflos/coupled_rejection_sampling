@@ -1,62 +1,69 @@
 """
 Example of coupling of tails of N(0,1) Gaussian distributions.
 """
+import time
 
 import jax.lax
 import jax.random
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.integrate
-from jax.config import config
 from scipy.stats import truncnorm
+import seaborn as sns
+from coupled_rejection_sampling.gauss_tails import coupled_gaussian_tails
 
-from coupled_rejection_sampling.gauss_tails import coupled_gaussian_tails, get_alpha, get_gamma
-
-config.update("jax_enable_x64", True)
-
-RUN = True
+RUN = False
 PLOT = True
 
 save_path = "out/gauss_tails.npz"
+
 
 if RUN:
     JAX_KEY = jax.random.PRNGKey(0)
 
     # Tails >5 is considered "hard" and the closer these are, the worse Thorisson's method is
-    mu = 6
-    eta = 6.1
+    mu = 6.
 
     M = 100_000  # Samples to draw
-    N_list = np.arange(1, 20, dtype=int)  # Ensemble sizes
+    DELTAS = np.linspace(1e-6, 0.5, num=200)
 
     # Compute maximal coupling probability (note that this can be inaccurate)
     p = lambda x: truncnorm.pdf(x, mu, np.inf)
-    q = lambda x: truncnorm.pdf(x, eta, np.inf)
-    mpq = lambda x: np.minimum(p(x), q(x))
-    true_pxy = scipy.integrate.quad(mpq, 0, np.Inf)[0]
-    print(f"Theoretical P(X=Y) = {true_pxy}")
-
 
     def experiment():
-        pxy_list = np.empty((len(N_list)))
-        x_samples = np.empty((len(N_list), M))
-        y_samples = np.empty((len(N_list), M))
+        pxy_list = np.empty((len(DELTAS), 2))
+        x_samples = np.empty((len(DELTAS), M))
+        y_samples = np.empty((len(DELTAS), M))
+        runtimes = np.empty((len(DELTAS),))
 
-        for n in range(len(N_list)):
-            N = N_list[n]
-            keys = jax.random.split(JAX_KEY, M)
-            x_samples[n], y_samples[n], acc, _ = jax.vmap(lambda k: coupled_gaussian_tails(k, mu, eta, N))(
-                keys)
+        keys = jax.random.split(JAX_KEY, M)
+        sampler = jax.jit(jax.vmap(coupled_gaussian_tails, in_axes=[0, None, None]))
+        # compilation run
+        *_, acc = sampler(keys, mu, mu + DELTAS[0])
+        acc.block_until_ready()
+
+        for n in range(len(DELTAS)):
+            delta = DELTAS[n]
+            eta = mu + delta
+
+            q = lambda x: truncnorm.pdf(x, eta, np.inf)
+            mpq = lambda x: np.minimum(p(x), q(x))
+            true_pxy = scipy.integrate.quad(mpq, 0, np.inf)[0]
+
+            tic = time.time()
+            x_samples[n], y_samples[n], acc = sampler(keys, mu, eta)
+            acc.block_until_ready()
+            toc = time.time()
+            runtimes[n] = toc - tic
             pxy = np.mean(acc)
-            pxy_list[n] = pxy
-            print(f"iteration = {n}, P(X=Y) = {pxy}")
+            pxy_list[n] = pxy, true_pxy
+            print(f"iteration = {n}, theoretical P(X=Y) = {true_pxy:.4f}, actual P(X=Y) = {pxy:.4f}, clock = {toc - tic:.4f}")
 
-        return x_samples, y_samples, pxy_list
+        return x_samples, y_samples, pxy_list, runtimes
 
 
-    x_samples, y_samples, pxy_list = experiment()
-    np.savez(save_path, x_samples=x_samples, y_samples=y_samples, pxy_list=pxy_list, M=M, true_pxy=true_pxy, N_list=N_list, mu=mu,
-             eta=eta)
+    x_samples, y_samples, pxy_list, runtimes = experiment()
+    np.savez(save_path, x_samples=x_samples, y_samples=y_samples, pxy_list=pxy_list, M=M, etas=mu + DELTAS, mu=mu, runtimes=runtimes)
 
 if PLOT:
     data = np.load(save_path)
@@ -65,57 +72,29 @@ if PLOT:
     y_samples = data["y_samples"]
     pxy_list = data["pxy_list"]
     M = data["M"]
-    N_list = data["N_list"]
-    true_pxy = data["true_pxy"]
-    mu = data["mu"]
-    eta = data["eta"]
 
     mu = data["mu"]
-    eta = data["eta"]
-
-    alpha = get_alpha(mu)
-    beta = get_alpha(eta)
-    gamma = get_gamma(mu, eta, alpha, beta)
-
+    etas = data["etas"]
+    runtimes = data["runtimes"]
     xs = np.linspace(mu, 10, 1000)
 
+    fig = plt.figure(figsize=(10, 10))
+    g = sns.jointplot(x=x_samples[10], y=y_samples[10], s=10)
+
+    plt.show()
+
     fig, ax = plt.subplots()
-    plt.title("Marginal p(y)")
-
-    xh, xbins = np.histogram(x_samples[0], bins=100, density=True)
-    ax.bar(0.5 * (xbins[:-1] + xbins[1:]), xh, xbins[1] - xbins[0], label='Histogram of x samples')
-
-    p = lambda x: np.where(x < mu, 0.0, alpha * np.exp(-alpha * (x - mu)))
-    ax.plot(xs, p(xs), 'r-', label='p(x)')
+    plt.title("Coupling probability as function of $\eta$")
+    ax.semilogy(etas, pxy_list[:, 0], label='Actual coupling probability', linestyle="-", color="k")
+    ax.semilogy(etas, pxy_list[:, 1], label='True coupling probability', linestyle="--", color="k")
+    plt.xlabel("$\eta$")
     ax.legend()
     plt.show()
 
     fig, ax = plt.subplots()
-    plt.title("Marginal q(y)")
-
-    yh, ybins = np.histogram(y_samples[0], bins=100, density=True)
-    ax.bar(0.5 * (ybins[:-1] + ybins[1:]), yh, ybins[1] - ybins[0], label='Histogram of y samples')
-
-    q = lambda x: np.where(x < eta, 0.0, beta * np.exp(-beta * (x - eta)))
-    ax.plot(xs, q(xs), 'r-', label='q(x)')
-    ax.legend()
-    plt.show()
-
-    fig, ax = plt.subplots()
-    plt.title("Scatter plot of samples")
-    ax.scatter(x_samples, y_samples, 1)
-    plt.xlabel("x")
-    plt.ylabel("y")
-    plt.show()
-
-    NS = np.array(N_list)
-    fig, ax = plt.subplots()
-    plt.title("Coupling probability as function of ensemble size")
-    ax.plot(NS, pxy_list, label='Coupling probability')
-    ax.hlines(true_pxy, 0, 1, transform=ax.get_yaxis_transform(), linestyles='--', label='Maximal coupling')
-    plt.xlabel("Ensemble size N")
-    plt.ylabel("Probability")
-    plt.ylim([true_pxy - 0.01, true_pxy + 0.01])
-    plt.xlim([min(NS), max(NS)])
+    plt.title("Run time as function of $\eta$")
+    ax.plot(etas, runtimes, linestyle="--", color="k")
+    plt.xlabel("$\eta$")
+    plt.ylabel("Run time (s)")
     ax.legend()
     plt.show()
