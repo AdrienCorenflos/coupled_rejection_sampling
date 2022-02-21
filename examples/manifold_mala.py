@@ -104,7 +104,7 @@ def simplified_manifold_mala_step(key, x, y, eps, sampler, log_pi):
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4))
-def sample_coupled_chain(key, eps, sampler, log_pi, D):
+def sample_rejection_coupled_chain(key, eps, sampler, log_pi, D):
     key, init_x_key, init_y_key = jax.random.split(key, 3)
 
     x0 = 0.1 * jax.random.normal(init_x_key, (D,))
@@ -153,7 +153,7 @@ def experiment():
     rej_key = JAX_KEY
     for i, N in enumerate(tqdm.tqdm(NS, leave=True)):
         rej_sampler = rejection_sample(N)
-        rej_experiment_fun = jax.jit(lambda op_key: sample_coupled_chain(op_key, EPS, rej_sampler, log_target, dim))
+        rej_experiment_fun = jax.jit(lambda op_key: sample_rejection_coupled_chain(op_key, EPS, rej_sampler, log_target, dim))
 
         # run it once to compile
         block = rej_experiment_fun(rej_key)
@@ -170,7 +170,7 @@ def experiment():
     thor_key = JAX_KEY
     for j, C in enumerate(tqdm.tqdm(CS, leave=True)):
         thor_sampler = thorisson_sample(C)
-        thor_experiment_fun = jax.jit(lambda op_key: sample_coupled_chain(op_key, EPS, thor_sampler, log_target, dim))
+        thor_experiment_fun = jax.jit(lambda op_key: sample_rejection_coupled_chain(op_key, EPS, thor_sampler, log_target, dim))
 
         # run it once to compile
         block = thor_experiment_fun(thor_key)
