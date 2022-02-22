@@ -8,6 +8,8 @@ import jax.random
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.integrate
+import tikzplotlib
+import tqdm
 from scipy.stats import truncnorm
 import seaborn as sns
 from coupled_rejection_sampling.gauss_tails import coupled_gaussian_tails
@@ -42,7 +44,7 @@ if RUN:
         *_, acc = sampler(keys, mu, mu + DELTAS[0])
         acc.block_until_ready()
 
-        for n in range(len(DELTAS)):
+        for n in tqdm.trange(len(DELTAS)):
             delta = DELTAS[n]
             eta = mu + delta
 
@@ -57,7 +59,6 @@ if RUN:
             runtimes[n] = toc - tic
             pxy = np.mean(acc)
             pxy_list[n] = pxy, true_pxy
-            print(f"iteration = {n}, theoretical P(X=Y) = {true_pxy:.4f}, actual P(X=Y) = {pxy:.4f}, clock = {toc - tic:.4f}")
 
         return x_samples, y_samples, pxy_list, runtimes
 
@@ -89,12 +90,13 @@ if PLOT:
     ax.semilogy(etas, pxy_list[:, 1], label='True coupling probability', linestyle="--", color="k")
     plt.xlabel("$\eta$")
     ax.legend()
-    plt.show()
+    tikzplotlib.save("out/gaussian_tails_coupling.tikz")
+
 
     fig, ax = plt.subplots()
     plt.title("Run time as function of $\eta$")
-    ax.plot(etas, runtimes, linestyle="--", color="k")
+    ax.plot(etas, runtimes, linestyle="-", color="k")
     plt.xlabel("$\eta$")
     plt.ylabel("Run time (s)")
     ax.legend()
-    plt.show()
+    tikzplotlib.save("out/gaussian_tails_runtime.tikz")
