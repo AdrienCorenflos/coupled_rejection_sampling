@@ -2,6 +2,7 @@ chex
 cvxpy
 jax[cpu]
 jupyter
+kalepy
 matplotlib
 numpy
 pandas
