@@ -92,6 +92,7 @@ def test_reflection_coupled_mh_full():
     plt.xscale("log")
     plt.show()
 
+
 @pytest.mark.parametrize("seed", [0])
 def test_reflection_coupled_mh_one_step(seed):
     # This test should be an assertion on (e.g.) a KS test, but I'm feeling lazy...

@@ -30,7 +30,7 @@ def reflection_coupled_mh(proposal, proposal_log_density, target_log_density):
         return x_prime, log_u < log_alpha
 
     def step_y(key, x, y, x_prime, accepted_x):
-        y_prime = _transport_fn(y, x, x_prime)
+        y_prime = _transport_fn(x, y, x_prime)
         reflection_key, residual_key = jax.random.split(key)
         log_u = jnp.log(jax.random.uniform(reflection_key))
         cond = accepted_x & (log_u + log_f_r(x_prime, x, y) < log_f_r(y_prime, y, x))
@@ -75,7 +75,7 @@ def _transport_fn(x, y, x_prime):
     e = jax.lax.select(r_curr < 1e-8, jnp.zeros_like(x), (y - x) / r_curr)
     x_diff = x_prime - x
     eta = x_diff - 2 * e * e.dot(x_diff)
-    out = x + eta
+    out = y + eta
     return out
 
 
