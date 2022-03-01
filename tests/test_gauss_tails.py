@@ -39,7 +39,7 @@ def test_coupled_exponentials(mu, delta):
     assert ks_1samp(ys, shifted_exp_cdf, args=(eta, alpha_eta))[1] > 0.05
 
 
-@pytest.mark.parametrize("mu", [5., 6.5])
+@pytest.mark.parametrize("mu", [5., 6.])
 @pytest.mark.parametrize("delta", [1e-3, 1e-1, 1.])
 def test_coupled_truncated_gaussians(mu, delta):
     N = 100_000
