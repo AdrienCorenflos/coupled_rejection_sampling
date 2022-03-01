@@ -8,6 +8,7 @@ import jax.lax
 import jax.numpy as jnp
 import jax.random
 import tensorflow_probability.substrates.jax as tfp
+from jax.experimental.host_callback import id_print
 
 from coupled_rejection_sampling.utils import logsubexp, log1mexp
 
@@ -132,20 +133,19 @@ def coupled_exponentials(key:chex.PRNGKey, mu:chex.Numeric, alpha_mu:chex.Numeri
 
 
 def _sampled_from_coupled_exponentials(key, mu, _eta, alpha_mu, alpha_eta, eta_mu, gamma_mu, gamma_eta, gamma):
-    def C1_inv(u):
-        log_u = jnp.log(u)
+    def C1_inv(log_u):
         return mu - logsubexp(eta_mu, log_u + logsubexp(eta_mu, gamma_mu)) / alpha_mu
 
-    def C2_inv(u):
-        return gamma - jnp.log(1.0 - u) / alpha_eta
+    def C2_inv(log_u):
+        return gamma - log_u / alpha_eta
 
     log_p1 = logsubexp(eta_mu, gamma_mu)
     log_p2 = gamma_eta
     log_p = log_p1 - jnp.logaddexp(log_p1, log_p2)
 
-    u1, u2 = jax.random.uniform(key, shape=(2,))
+    log_u1, log_u2 = jnp.log(jax.random.uniform(key, shape=(2,)))
 
-    res = jax.lax.cond(jnp.log(u1) < log_p, C1_inv, C2_inv, u2)
+    res = jax.lax.cond(log_u1 < log_p, C1_inv, C2_inv, log_u2)
     return res
 
 
@@ -153,25 +153,31 @@ def _sample_from_first_marginal(key, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma
     key1, key2 = jax.random.split(key, 2)
     log_u1 = jnp.log(jax.random.uniform(key1))
 
-    log_p1 = logsubexp(gamma_mu, gamma_eta)
+    log_p1 = logsubexp(gamma_mu, gamma_eta)  # This has the same value as $\log(\tilde{Z})$
     log_p2 = log1mexp(eta_mu)
     log_p = log_p1 - jnp.logaddexp(log_p1, log_p2)
-
-    log_tZ = logsubexp(gamma_mu, gamma_eta)
 
     def _sample_from_tail(log_u):
         return mu - log1mexp(log_u + log1mexp(eta_mu)) / alpha_mu
 
     def _sample_from_overlap(log_u):
-        # upper bound
-        log_d = logsubexp(alpha_mu * mu, alpha_eta * eta - (alpha_eta - alpha_mu) * gamma) - log_tZ
-        xp2 = -(1.0 / alpha_eta) * (log_u - log_d)
 
         def log_f(x):
-            return logsubexp(alpha_mu * (x - mu), - alpha_eta * (x - eta) * gamma) - log_tZ - log_u
+            return logsubexp(-alpha_mu * (x - mu), -alpha_eta * (x - eta)) - log_p1 - log_u
 
-        res, *_ = tfp.math.find_root_chandrupatla(log_f, gamma, xp2, position_tolerance=1e-6,
-                                                  value_tolerance=1e-6)
+        # upper bound for the solution is given by a lower bounding of the density
+        def upper_bound_loop(carry):
+
+            curr_upper_bound, _ = carry
+            curr_upper_bound = 1.5 * curr_upper_bound
+            obj = log_f(curr_upper_bound)
+            return curr_upper_bound, obj >= 0
+
+        upper_bound, _ = jax.lax.while_loop(lambda carry: carry[-1], upper_bound_loop, (gamma, True))
+
+        res, objective_at_estimated_root, *_ = tfp.math.find_root_chandrupatla(log_f, gamma, upper_bound,
+                                                                               position_tolerance=1e-6,
+                                                                               value_tolerance=1e-6)
 
         return res
 
@@ -179,12 +185,16 @@ def _sample_from_first_marginal(key, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma
 
 
 def _sample_from_second_marginal(key, mu, eta, alpha_mu, alpha_eta, eta_mu, gamma_mu, gamma_eta, gamma):
-    log_Zq = log1mexp(logsubexp(jnp.logaddexp(eta_mu, gamma_mu), gamma_eta))
+    log_Zq_1 = jnp.logaddexp(0, gamma_mu)  # log(1 + exp(gamma_mu))
+    log_Zq_2 = jnp.logaddexp(eta_mu, gamma_eta)
+    log_Zq = logsubexp(log_Zq_1, log_Zq_2)
     log_u = jnp.log(jax.random.uniform(key))
 
     def log_f(x):
-        res = logsubexp(eta_mu, -alpha_mu * (x - mu))
-        res = jnp.logaddexp(res, -alpha_eta * (x - eta)) - log_Zq - logsubexp(-log_Zq, log_u)
+        res_1 = jnp.logaddexp(0, -alpha_mu * (x - mu))  # log(1 + exp(...))
+        res_2 = jnp.logaddexp(eta_mu, -alpha_eta * (x - eta))
+        res = logsubexp(res_1, res_2)
+        res = res - log_Zq - log_u
         return res
 
     out, objective_at_estimated_root, *_ = tfp.math.find_root_chandrupatla(log_f, eta, gamma, position_tolerance=1e-6,

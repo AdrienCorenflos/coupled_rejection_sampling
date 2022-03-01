@@ -10,11 +10,9 @@ import jax.numpy as jnp
 import jax.scipy.linalg as jlinalg
 import numpy as np
 import pandas as pd
-import tikzplotlib
 import tqdm.auto as tqdm
 from jax.scipy.stats import norm
 from matplotlib import pyplot as plt
-from matplotlib.ticker import FormatStrFormatter
 
 from coupled_rejection_sampling.mvn import coupled_mvns, mvn_logpdf
 from coupled_rejection_sampling.thorisson import modified_thorisson
