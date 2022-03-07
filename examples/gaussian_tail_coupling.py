@@ -90,6 +90,7 @@ if PLOT:
     ax.semilogy(etas, pxy_list[:, 1], label='True coupling probability', linestyle="--", color="k")
     plt.xlabel("$\eta$")
     ax.legend()
+    # plt.show()
     tikzplotlib.save("out/gaussian_tails_coupling.tikz")
 
 
