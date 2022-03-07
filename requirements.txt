@@ -1,3 +1,4 @@
+chex
 cvxpy
 jax[cpu]
 jupyter
@@ -9,5 +10,6 @@ pytest
 pytest-mock
 scipy
 seaborn
+tensorflow_probability
 tikzplotlib
 tqdm

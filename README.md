@@ -14,7 +14,7 @@ Otherwise, simply download the repository and run `pip .`.
 
 ### Example
 
-See the `examples` and `tests` folders. 
+See the `examples` and `tests` folders. The examples implement the paper illustrations, while the tests test single functions behaviours and are a bit more low level.
 
 
 ### References
