@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import jax.random
 import jax.scipy.linalg as jlinalg
 import jax.scipy.stats as jstats
-import numpy as np
 from jax import numpy as jnp
 from jax.scipy.linalg import cho_solve
 
@@ -33,7 +32,7 @@ def get_optimal_covariance(chol_P, chol_Sig):
     """
     d = chol_P.shape[0]
     if d == 1:
-        return np.maximum(chol_P, chol_Sig)
+        return jnp.maximum(chol_P, chol_Sig)
 
     right_Y = jlinalg.solve_triangular(chol_P, chol_Sig, lower=True)  # Y = RY.T RY
     w_Y, v_Y = jlinalg.eigh(right_Y.T @ right_Y)
