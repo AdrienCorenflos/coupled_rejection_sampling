@@ -19,4 +19,4 @@ See the `examples` and `tests` folders. The examples implement the paper illustr
 
 ### References
 
-.. [1]: Corenflos, A. and Särkkä, S., “The Coupled Rejection Sampler”, <i>arXiv e-prints</i>, 2022.
+.. [1]: Corenflos, A. and Särkkä, S., “The Coupled Rejection Sampler”, <i>arXiv e-prints</i>, 2022. (https://arxiv.org/abs/2201.09585)
