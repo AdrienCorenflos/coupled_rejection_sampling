@@ -71,6 +71,16 @@ def reflection_coupled_mh(proposal, proposal_log_density, target_log_density):
 
 
 def _transport_fn(x, y, x_prime):
+    shape = x.shape
+    flat_x = x.flatten()
+    flat_y = y.flatten()
+    flat_x_prime = x_prime.flatten()
+    flat_out = _transport_flat_x(flat_x, flat_y, flat_x_prime)
+    out = flat_out.reshape(shape)
+    return out
+
+
+def _transport_flat_x(x, y, x_prime):
     r_curr = jnp.linalg.norm(y - x)
     e = jax.lax.select(r_curr < 1e-8, jnp.zeros_like(x), (y - x) / r_curr)
     x_diff = x_prime - x
